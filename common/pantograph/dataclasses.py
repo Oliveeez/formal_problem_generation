@@ -10,7 +10,7 @@ from loguru import logger
 from openai.types import CompletionUsage
 from dacite import from_dict
 
-from common.utils import parse_expr
+from common.utils import parse_expr, unique, to_comment
 from common.constants import Expr
 
 
@@ -236,8 +236,8 @@ class TacticInvocation:
     One tactic invocation with the before/after goals extracted from Lean source
     code.
     """
-    before: str
-    after: str
+    before: List[str]
+    after: List[str]
     tactic: str
     used_constants: List[str]
     sub_invocations: List['TacticInvocation'] = field(default_factory=list)
@@ -325,8 +325,10 @@ class ProofSearchState:
 class ProofSearchResult:
     duration: float
     success: bool
-    proof: List[Tuple[int, Tactic]] = field(default_factory=list)
+    proof: List[Tuple[int, Tactic]] = field(default_factory=list) # List of tactics (and additional information, e.g. proofs of `have`s) in the proof
     final_state: Optional[GoalState] = None
+        # Since sometimes we ignore some tailing goals and focus on the main goals,
+        # After solving all of them, the ignored goals should be in `final_state`.
     states: List[GoalState] = field(default_factory=list)
 
     def serialize(self) -> Dict:
@@ -370,6 +372,72 @@ class TokenUsage:
         # Return self to allow chaining
         return self
 
+# Deprecated
+@dataclass
+class DataPoint:
+    # Base information
+    informal_problem: str
+    informal_answer: str
+    
+    # Meta information
+    level: str
+    subject: str
+    
+    # Base information
+    informal_solution: Optional[str]=None
+    header: Optional[str]=None
+    
+    # Formal problem
+    formal_problem: Optional[str]=None
+    formal_answer: Optional[str]=None
+    formal_answer_type: Optional[str]=None  # Deprecated
+    
+    # Formal answer
+    formal_solution_draft: Optional[str]=None
+    formal_gaps: Optional[List[Goal]]=None
+    formal_proofs: List[ProofSearchResult]=field(default_factory=list)
+    
+    # Meta information
+    annotator: List[str]=field(default_factory=list)
+
+    def to_lean_code(self) -> str:
+        code = '\n---\n\n'
+        code += f'-- subject: "{self.subject}", level: "{self.level}", annotator: "{self.annotator}"\n'
+        code += f'-- # informal_problem\n{to_comment(self.informal_problem)}\n'
+        if self.header is not None:
+            code += '-- # header\n' + '\n'.join(['-- ' + l for l in self.header.split('\n')]) + '\n'
+        if self.formal_problem is not None:
+            code += f'-- # formal_problem\nexample {self.formal_problem}\n:\n{self.formal_answer} := by\n'
+            
+            if self.formal_solution_draft is not None:
+                code += f'-- # formal_solution_draft\n{self.formal_solution_draft}\n'
+            else:
+                code += f'-- # formal_solution_draft\nsorry\n'
+        return code
+    
+    def load_lean_code(self, code: str) -> None:
+        raise NotImplementedError()
+    
+    def serialize(self) -> Dict:
+        return {
+            'informal_problem': self.informal_problem,
+            'informal_answer': self.informal_answer,
+            'informal_solution': self.informal_solution,
+            'header': self.header,
+            'formal_problem': self.formal_problem,
+            'formal_answer': self.formal_answer,
+            'formal_answer_type': self.formal_answer_type,
+            'formal_solution_draft': self.formal_solution_draft,
+            'formal_gaps': None if self.formal_gaps is None else [g.serialize() for g in self.formal_gaps],
+            'formal_proofs': [p.serialize() for p in self.formal_proofs],
+            'level': self.level,
+            'subject': self.subject,
+            'annotator': self.annotator
+        }
+    
+    def is_solved(self) -> bool:
+        return (self.formal_gaps is not None) and (len(self.formal_gaps) == len(self.formal_proofs))
+
 @dataclass
 class FormalProblem:
     # Informal information
@@ -379,10 +447,15 @@ class FormalProblem:
     
     # Formal problem
     header: Optional[str]=None
+    formal_statement: Optional[str]=None
     intros: List[Variable]=field(default_factory=list)
     formal_answer: Optional[str]=None
     formal_answer_type: Optional[str]=None
     outros: List[Variable]=field(default_factory=list)
+    
+    # Formal solution
+    formal_solution_draft: Optional[str] = None
+    formal_proofs: List[ProofSearchResult]=field(default_factory=list)
     
     # Meta information
     metainfo: Dict=field(default_factory=dict)
@@ -420,9 +493,43 @@ class FormalProblem:
             'informal_answer': self.informal_answer,
             'informal_solution': self.informal_solution,
             'header': self.header,
+            'formal_statement': self.formal_statement,
             'intros': [v.serialize() for v in self.intros],
             'formal_answer': self.formal_answer,
             'formal_answer_type': self.formal_answer_type,
             'outros': [v.serialize() for v in self.outros],
+            'formal_solution_draft': self.formal_solution_draft,
+            'formal_proofs': [p.serialize() for p in self.formal_proofs],
             'metainfo': self.metainfo,
+        }
+
+@dataclass
+class SolutionAutoformalizationResult(FormalProblem):
+    success: bool=field(default_factory=lambda : False, init=False)
+    token_usages: Dict[str, TokenUsage]=field(default_factory=lambda : C.defaultdict(TokenUsage), init=False)
+
+    @classmethod
+    def from_kwargs(cls, **kwargs):
+        cls_fields = [f.name for f in fields(cls)]
+
+        native_args, new_args = {}, {}
+        for name, val in kwargs.items():
+            if name in cls_fields:
+                if name == 'metainfo':
+                    assert isinstance(val, Dict), 'field `metainfo` should be a `Dict`'
+                    new_args |= val
+                else:
+                    native_args[name] = val
+            else:
+                new_args[name] = val
+
+        ret = cls(metainfo=new_args, **native_args)
+        # TODO: A new flow: given formal problem, automatically informalize it and solve it using solution autoformalization.
+
+        return ret
+
+    def serialize(self):
+        return super().serialize() | {
+            'success' : self.success,
+            'token_usages': {k : v.serialize() for k, v in self.token_usages.items()}
         }

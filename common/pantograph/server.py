@@ -12,8 +12,8 @@ from loguru import logger
 import numpy as np
 from async_lru import alru_cache
 
-from common.utils import to_sync, Spawn
-from common.constants import DEFAULT_CORE_OPTIONS, REPL_TIMEOUT, REPL_MAXREAD
+from common.utils import to_sync, timeit, Spawn, chunk_list
+from common.constants import DEFAULT_CORE_OPTIONS, REPL_TIMEOUT, REPL_MAXREAD, FPS_GLOBAL_SETTING
 from common.pantograph.dataclasses import (
     parse_expr,
     Expr,
@@ -29,6 +29,8 @@ from common.pantograph.dataclasses import (
     CompilationUnit,
     TacticInvocation,
 )
+
+# timeit = lambda x : x   # Comment out to enable timing
 
 def _get_proc_cwd():
     return Path(__file__).parent
@@ -221,7 +223,9 @@ class Server:
         assert self.proc
         s = json.dumps(payload, ensure_ascii=False)
         
-        self.proc.sendline(f"{cmd} {s}")
+        # self.proc.sendline(f"{cmd} {s}")
+        for _, chunk in chunk_list(f"{cmd} {s}\n", 1024):
+            self.proc.sendline(chunk)
         
         try:
             line = await self.proc.readline_async()
@@ -541,9 +545,12 @@ def record_server_error(func):
             raise e
     return wrapper
 
-class AutoRecoverServer:
-    def __init__(self, max_count: int=1024, tag: str='', _sync_init: bool=True, *args, **kwargs):
+class PersistentServer:
+    def __init__(self, max_count: int=1024, is_state_based: bool=True, tag: str='', _sync_init: bool=True, *args, **kwargs):
         self.max_count = max_count
+        self.is_state_based = is_state_based
+            # if is_state_based, load statements inside `self.init_filtering_state`, then can apply tactics in multiple instances. But require statement to declare all variables explicitly and no `[]`, `{}` is allowed
+            # o.w. run in vanilla server, `load_sorry` and `goal_tactic` cannot be applied interleaved multiple times.
         self.tag = tag
         self.server_args = args
         self.server_kwargs = kwargs
@@ -558,15 +565,74 @@ class AutoRecoverServer:
         logger.debug(f'PersistentServer({self.tag}): Restarting...')
         self.server = await Server.create(*self.server_args, **self.server_kwargs)
 
+        if self.is_state_based:
+            units = await self.server.load_sorry_async('''example : True := sorry''')
+            self.init_filtering_state = units[-1].goal_state
+            assert 'error' not in str(units) and self.init_filtering_state is not None
+
         self.count = 0
     
     check_restart = to_sync(check_restart_async)
 
     @record_server_error
+    async def load_statement_async(self, statement: str, intros: List[str]=[], header: str='') -> GoalState :
+        await self.check_restart_async()
+        assert self.is_state_based, f'PersistentServer({self.tag}): load_statement_async() must be used w/ state-based.'
+
+        prev_init_state = await self.server.goal_tactic_async(
+            self.init_filtering_state, 0, TacticDraft(
+                '\n'.join(l + ' in' for l in header.strip().splitlines() if l.strip() != '') + '\n' + \
+                f'have _h_backward_state_ : {statement}\n:= sorry\n' + \
+                'sorry'
+            )
+        )
+        init_state = await self.server.goal_tactic_async(prev_init_state, 1, 'trivial')
+        if len(intros) > 0:
+            init_state = await self.server.goal_tactic_async(init_state, 0, 
+                'intros ' + ' '.join(intros)
+            )
+        assert len(init_state.goals) == 1, f'PersistentServer({self.tag}): {[init_state]}'
+
+        return init_state
+
+    @record_server_error
+    async def load_example_async(self, code: str) -> GoalState:
+        await self.check_restart_async()
+        assert not self.is_state_based, f'PersistentServer({self.tag}): load_example_async() must be used w/o/ state-based.'
+
+        # Assuming `statement` to a `example`, e.g. `example (x : Real) : x^2 >= 0 := sorry`
+        units = await self.server.load_sorry_async(code)
+        assert len(units) >= 1 and 'error' not in str([x.messages for x in units]), f'units={[units]}'
+        init_state = units[-1].goal_state
+        assert init_state is not None and len(init_state.goals) == 1, f'init_state={[init_state]}'
+
+        return init_state
+
+    @record_server_error
+    async def load_code_async(self, code: str) -> List[CompilationUnit]:
+        await self.check_restart_async()
+        assert not self.is_state_based, f'PersistentServer({self.tag}): load_code_async() must be used w/o/ state-based.'
+
+        # Assuming `statement` to a `example`, e.g. `example (x : Real) : x^2 >= 0 := sorry`
+        units = await self.server.load_sorry_async(code)
+        return units
+
+    @record_server_error
+    async def goal_tactic_async(self, *args, **kwargs) -> GoalState:
+        assert self.is_state_based, f'PersistentServer({self.tag}): goal_tactic_async() must be used w/ state-based.'
+        return await self.server.goal_tactic_async(*args, **kwargs)
+
+    @record_server_error
+    async def goal_print_async(self, *args, **kwargs):
+        assert self.is_state_based, f'PersistentServer({self.tag}): goal_print_async() must be used w/ state-based.'
+        return await self.server.goal_print_async(*args, **kwargs)
+
+    @record_server_error
     async def load_sorry_async(self, code: str) -> GoalState :
         await self.check_restart_async()
-        self.count += 1
+        assert not self.is_state_based, f'PersistentServer({self.tag}): load_example_async() must be used w/o/ state-based.'
 
+        # Assuming `statement` to a `example`, e.g. `example (x : Real) : x^2 >= 0 := sorry`
         return await self.server.load_sorry_async(code)
 
     def is_automatic(self):
@@ -801,4 +867,5 @@ class TestServer(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    FPS_GLOBAL_SETTING['TO_SYNC_ENABLED'] = True
     unittest.main()
