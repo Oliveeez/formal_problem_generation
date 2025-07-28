@@ -19,15 +19,17 @@ class Variable:
     t: Expr
     v: Optional[Expr] = None
     name: Optional[str] = None
+    raw_name: Optional[str] = field(default=None, repr=False, hash=False, compare=False)
 
     @staticmethod
     def parse(payload: Dict):
         name = payload.get("userName")
+        raw_name = payload.get("name")
         t = parse_expr(payload["type"])
         v = payload.get("value")
         if v:
             v = parse_expr(v)
-        return Variable(t, v, name)
+        return Variable(t, v, name, raw_name)
 
     def __str__(self):
         """

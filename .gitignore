@@ -1,6 +1,7 @@
 # Pantograph
 common/pantograph/lean-toolchain
 common/pantograph/pantograph-repl
+data/MiniF2F/.lake
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
