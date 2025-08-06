@@ -594,6 +594,8 @@ class PersistentServer:
         assert len(init_state.goals) == 1, f'PersistentServer({self.tag}): {[init_state]}'
 
         return init_state
+    
+    load_statement = to_sync(load_statement_async)
 
     @record_server_error
     async def load_example_async(self, code: str) -> GoalState:
@@ -621,6 +623,8 @@ class PersistentServer:
     async def goal_tactic_async(self, *args, **kwargs) -> GoalState:
         assert self.is_state_based, f'PersistentServer({self.tag}): goal_tactic_async() must be used w/ state-based.'
         return await self.server.goal_tactic_async(*args, **kwargs)
+    
+    goal_tactic = to_sync(goal_tactic_async)
 
     @record_server_error
     async def goal_print_async(self, *args, **kwargs):

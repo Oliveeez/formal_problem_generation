@@ -541,8 +541,8 @@ class SolutionAutoformalizationResult(FormalProblem):
 # @dataclass(frozen=True)
 class ProblemGenerationStep(msgspec.Struct, frozen=True):
     step_draft: str
-    proof: Optional[Tuple[str]]
-    new_contexts: Optional[Tuple[Variable]] # Newly introduced contexts (excluding removed old contexts, including newly-modified contexts)
+    proof: Optional[List[str]]
+    new_contexts: Optional[List[Variable]] # Newly introduced contexts (excluding removed old contexts, including newly-modified contexts)
 
     # def __post__init__(self):
     #     self.proof = tuple(self.proof)
@@ -585,7 +585,7 @@ class ProblemGenerationProcess(msgspec.Struct):
     
     # Formal deductive solution
     formal_solution_draft: str
-    formal_proofs: List[List[Tuple[int, str]]]
+    formal_proofs: List[str]
 
     # Parse Results
     steps: List[ProblemGenerationStep]

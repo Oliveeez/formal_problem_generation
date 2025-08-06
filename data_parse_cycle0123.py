@@ -29,7 +29,7 @@ from common.pantograph.solving_server import PersistentPropSolvingServer
 from agent.proof_search import SFT_NALP_LLMProofSearchAgent
 from agent.solution_autoformalization import SolutionAutoformalizer, SolutionAutoformalizationResult
 
-N_CONCURRENCY_PER_WORKER = 16
+N_CONCURRENCY_PER_WORKER = 8
 
 async def async_worker(
         sample: SolutionAutoformalizationResult,
@@ -50,7 +50,7 @@ async def async_worker(
             solution_blocks = [s[1] for s in sample.metainfo['solution_state_transition']]
             sample.metainfo.pop('solution_state_transition')
         else:
-            solution_blocks = solution_decompose(sample['formal_solution_draft'])   # Cycle 3
+            solution_blocks = solution_decompose(sample.formal_solution_draft)   # Cycle 3
         formal_proofs = sample.formal_proofs[:]
         # logger.debug(f'async_worker({split_base_cnt+idx}): sample.formal_statement:\n{sample.formal_statement}')
 
@@ -76,7 +76,7 @@ async def async_worker(
             ProblemGenerationStep(
                 step_draft=f'have {v.name} : {v.t} := sorry' if v.v is None else f'let {v.name} : {v.t} := {v.v}',
                 proof=None,
-                new_contexts=tuple([v])
+                new_contexts=[v]
             ) for v in forward_state.goals[0].variables
         ]
         fvarid_to_istep = {
@@ -85,13 +85,13 @@ async def async_worker(
         i_proof = 0
 
         # Add dependencies between current `parsed_steps` (hypotheses)
-        dependency_graph.add_nodes_from(parsed_steps)
+        dependency_graph.add_nodes_from(range(len(parsed_steps)))
         for (i, v) in enumerate(parsed_steps):
             idents = parse_idents(v.new_contexts[0].t)
-            for u in parsed_steps[:i]:
-                if u.new_contexts[0].name in idents:
+            for (j, u) in enumerate(parsed_steps[:i]):
+                if u.new_contexts[0].name in idents or any(ident.startswith(u.new_contexts[0].name + '.') for ident in idents):
                     # edge (u, v): v depends on u
-                    dependency_graph.add_edge(u, v)
+                    dependency_graph.add_edge(j, i)
 
         # Depednency between proof scripts
         for i_step, draft_step in enumerate(solution_blocks[:-1]):
@@ -124,12 +124,12 @@ async def async_worker(
             # 3.1 Add parsed step
             cur_step = ProblemGenerationStep(
                 step_draft=draft_step,
-                proof=tuple(['\n'.join([remove_min_whitespace(s[1]) for s in p.proof]) for p in sample.formal_proofs[i_proof:i_proof+n_sorries]]),
-                new_contexts=tuple(new_contexts)
+                proof=['\n'.join([remove_min_whitespace(s[1]) for s in p.proof]) for p in sample.formal_proofs[i_proof:i_proof+n_sorries]],
+                new_contexts=new_contexts
             )
             # logger.debug(f'async_worker({split_base_cnt+idx}): Step: {cur_step.step}')
             parsed_steps.append(cur_step)
-            dependency_graph.add_node(cur_step)
+            dependency_graph.add_node(len(parsed_steps)-1)
             i_proof += n_sorries
             # 3.2 Coarse-grained dependency
             # - Case 1. types in new_contexts
@@ -150,13 +150,6 @@ async def async_worker(
             
             for v in forward_state.goals[0].variables:
                 assert v.raw_name not in soft_dependencies and v.raw_name not in hard_dependencies, f'v.raw_name={v.raw_name}, soft_dependencies={soft_dependencies}, hard_dependencies={hard_dependencies}'
-                
-                # Shall we try clearing steps introducing `v` and all variables dependent on it?
-                # No. Because this clearing is in reversed order. If some variable `u` is dependent on `v`
-                # - Case 1. `s` does not depend on `u`: `u` is already removed
-                # - Case 2. `s` depends on `u`: it does not matter if we still connect `v` with `u`.
-                # TODO: 08.05 - Current impl. is not reversed order. try clear!
-
                 # 5.1. Find v
                 v_to_remove = [vv for vv in tmp_parsing_state.goals[0].variables if vv.raw_name == v.raw_name]
                 if len(v_to_remove) == 0:
@@ -165,23 +158,23 @@ async def async_worker(
                 v_to_remove = v_to_remove[0]
                 
                 # 5.2. Try removing `v`
-                if '✝' not in v.name:
+                if '✝' not in v_to_remove.name:
                     try:
-                        new_tmp_parsing_state = await server.tactic_server.goal_tactic_async(tmp_parsing_state, 0, f'clear! {v.name}')
+                        new_tmp_parsing_state = await server.tactic_server.goal_tactic_async(tmp_parsing_state, 0, f'clear! {v_to_remove.name}')
                     except TacticFailure as e:
-                        soft_dependencies.add(v.raw_name)
-                        import pdb; pdb.set_trace()
-                        logger.warning(f'async_worker({split_base_cnt+idx}): Cannot remove {v} ({[vv.name for vv in parsed_steps[fvarid_to_istep[v.raw_name]].new_contexts]})')
+                        soft_dependencies.add(v_to_remove.raw_name)
+                        logger.warning(f'async_worker({split_base_cnt+idx}): Cannot remove {v_to_remove} ({[vv.name for vv in parsed_steps[fvarid_to_istep[v_to_remove.raw_name]].new_contexts]})')
                         continue
                 else:
                     n_inaccessible_after = 0
                     for vv in reversed(tmp_parsing_state.goals[0].variables):
-                        if vv.raw_name == v.raw_name:
+                        if vv.raw_name == v_to_remove.raw_name:
                             break
                         else:
                             if '✝' in vv.name:
                                 n_inaccessible_after += 1
                     assert all(vv.name != '_TMP_NAME_TO_REMOVE' for vv in tmp_parsing_state.goals[0].variables), str(tmp_parsing_state)
+                    
                     new_tmp_parsing_state = await server.tactic_server.goal_tactic_async(tmp_parsing_state, 0, f'rename_i _TMP_NAME_TO_REMOVE' + ' _' * n_inaccessible_after)
                     
                     all_to_temove = [vv for vv in new_tmp_parsing_state.goals[0].variables if vv.name == '_TMP_NAME_TO_REMOVE']
@@ -191,9 +184,8 @@ async def async_worker(
                         new_tmp_parsing_state = await server.tactic_server.goal_tactic_async(new_tmp_parsing_state, 0, f'clear! _TMP_NAME_TO_REMOVE')
                         # Try clear!
                     except TacticFailure as e:
-                        soft_dependencies.add(v.raw_name)
-                        import pdb; pdb.set_trace()
-                        logger.warning(f'async_worker({split_base_cnt+idx}): Cannot remove {v} ({[vv.name for vv in parsed_steps[fvarid_to_istep[v.raw_name]].new_contexts]})')
+                        soft_dependencies.add(v_to_remove.raw_name)
+                        logger.warning(f'async_worker({split_base_cnt+idx}): Cannot remove {v_to_remove} ({[vv.name for vv in parsed_steps[fvarid_to_istep[v_to_remove.raw_name]].new_contexts]})')
                         continue
                 
                 # 5.3. Try executing cur_step
@@ -201,21 +193,20 @@ async def async_worker(
                     test_tmp_parsing_state = await server.tactic_server.goal_tactic_async(new_tmp_parsing_state, 0, cur_step.step)
                     tmp_parsing_state = new_tmp_parsing_state
                 except TacticFailure as e:
-                    hard_dependencies.add(v.raw_name)
-                    hard_dependencies_global.append((parsed_steps[fvarid_to_istep[v.raw_name]], cur_step))
-                    # logger.debug(f'async_worker({split_base_cnt+idx}): {[vv.name for vv in cur_step.new_contexts]} depends on {[vv.name for vv in parsed_steps[fvarid_to_istep[v.raw_name]].new_contexts]}')
+                    hard_dependencies.add(v_to_remove.raw_name)
+                    hard_dependencies_global.append((parsed_steps[fvarid_to_istep[v_to_remove.raw_name]], cur_step))
+                    # logger.debug(f'async_worker({split_base_cnt+idx}): {[vv.name for vv in cur_step.new_contexts]} depends on {[vv.name for vv in parsed_steps[fvarid_to_istep[v_to_remove.raw_name]].new_contexts]}')
                     continue
-                # logger.info(f'Removed {v} ({[vv.name for vv in parsed_steps[fvarid_to_istep[v.raw_name]].new_contexts]})')
+                # logger.info(f'Removed {v_to_remove} ({[vv.name for vv in parsed_steps[fvarid_to_istep[v_to_remove.raw_name]].new_contexts]})')
             # logger.info(f'Final removing state: {test_tmp_parsing_state}')
             
             # 6. Iteration end
             if len(soft_dependencies) > 0:
-                import pdb; pdb.set_trace()
                 logger.warning(f'async_worker({split_base_cnt+idx}): len(soft_dependencies) > 0: {soft_dependencies}')
             for d in I.chain(soft_dependencies, hard_dependencies):
                 # edge (u, v): v depends on u
                 # logger.info(f'async_worker({split_base_cnt+idx}): Adding dependency: {[vv.name for vv in parsed_steps[fvarid_to_istep[d]].new_contexts]} -> {[vv.name for vv in cur_step.new_contexts]}')
-                dependency_graph.add_edge(parsed_steps[fvarid_to_istep[d]], cur_step)
+                dependency_graph.add_edge(fvarid_to_istep[d], len(parsed_steps)-1)
             
             forward_state = new_forward_state
 
@@ -228,17 +219,17 @@ async def async_worker(
             proof=None,
             new_contexts=None
         )
-        dependency_graph.add_node(submission_step)
-        for s in reversed(parsed_steps):
+        dependency_graph.add_node(len(parsed_steps))
+        for (i, s) in reversed(list(enumerate(parsed_steps))):
             if submission_name in [v.name for v in s.new_contexts]:
-                dependency_graph.add_edge(s, submission_step)
+                dependency_graph.add_edge(i, len(parsed_steps))
                 break
-        assert dependency_graph.in_degree(submission_step) == 1, f'dependency_graph.in_degree(submission_step)={dependency_graph.in_degree(submission_step)}'
+        assert dependency_graph.in_degree(len(parsed_steps)) == 1, f'dependency_graph.in_degree(submission_step)={dependency_graph.in_degree(len(parsed_steps))}'
         parsed_steps.append(submission_step)
 
         # Reduce transitive edges; Compute depths
         reduced_dependency_graph = nx.algorithms.dag.transitive_reduction(dependency_graph)
-        depth_dict = {n : 0 for n in parsed_steps}
+        depth_dict = {n : 0 for n in range(len(parsed_steps))}
         for u in nx.topological_sort(reduced_dependency_graph):
             for v in reduced_dependency_graph.successors(u):
                 depth_dict[v] = max(depth_dict[v], depth_dict[u]+1)
@@ -252,23 +243,20 @@ async def async_worker(
         # TODO: the current setting (depth-first) can encourage models to explore!
         # TODO: Ablation on this: Graph pruning
 
-        node_id_dict = {
-            s : i for (i, s) in enumerate(parsed_steps)
-        }
-        edges = [
-            (node_id_dict[u], node_id_dict[v]) for (u, v) in dependency_graph.edges
-        ]
         while True:
-            available_actions = sorted([n for (n, d) in G.in_degree() if d == 0], key=lambda n : (-depth_dict[n], n.is_introducing))
-            chosen_action = available_actions[0]
-            reassembled_trajectory.append((deductive_state.goals[0].variables, node_id_dict[chosen_action]))
+            available_actions = sorted([n for (n, d) in G.in_degree() if d == 0], key=lambda n : (-depth_dict[n], parsed_steps[n].is_introducing))
+            chosen_action = parsed_steps[available_actions[0]]
+            reassembled_trajectory.append((deductive_state.goals[0].variables, available_actions[0]))
             if chosen_action.is_submitting:
                 assert submission_name in [v.name for v in deductive_state.goals[0].variables], f'submission_name={submission_name}, deductive_state={deductive_state}'
                 if not set(deductive_state.goals[0].variables).issubset(set(forward_state.goals[0].variables)):
                     logger.warning(f'¬(deductive_state ⊆ forward_state): {deductive_state.goals[0].variables}, {forward_state.goals[0].variables}')
                 break
-            deductive_state = await server.tactic_server.goal_tactic_async(deductive_state, 0, chosen_action.step)
-            G.remove_node(chosen_action)
+            try:
+                deductive_state = await server.tactic_server.goal_tactic_async(deductive_state, 0, chosen_action.step)
+            except:
+                import pdb; pdb.set_trace()
+            G.remove_node(available_actions[0])
         
         finished_list[idx] = ProblemGenerationProcess(
             informal_problem=sample.informal_problem,
@@ -281,7 +269,7 @@ async def async_worker(
                 '\n'.join([remove_min_whitespace(s[1]) for s in p.proof]) for p in sample.formal_proofs
             ],
             steps=parsed_steps,
-            dependencies=edges,
+            dependencies=[e for e in dependency_graph.edges],
             trajectory=reassembled_trajectory,
             metainfo=json.dumps(sample.metainfo)
         )
@@ -355,7 +343,7 @@ def worker(args: Tuple) -> int:
 
     try:
         asyncio.get_event_loop().run_until_complete(_async_main())
-        logger.opt(colors=True).info(f'<green>worker({split_base_cnt}): All succeeded.</green>')
+        logger.opt(colors=True).info(f'<cyan>worker({split_base_cnt}): All finished.</cyan>')
     except Exception as e:
         logger.error(f"worker({split_base_cnt}): Failed due to Exception {e}\n{traceback.format_exc()}")
     
