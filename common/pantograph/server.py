@@ -317,11 +317,11 @@ class Server:
             raise TacticFailure(f"Invalid tactic type: {tactic}")
         result = await self.run_async('goal.tactic', args)
         if "error" in result:
-            raise ServerError(result)
+            raise ServerError(result, state, tactic)
         if "tacticErrors" in result:
-            raise TacticFailure(result)
+            raise TacticFailure(result, state, tactic)
         if "parseError" in result:
-            raise TacticFailure(result)
+            raise TacticFailure(result, tactic)
         return GoalState.parse(result, self.to_remove_goal_states)
 
     goal_tactic = to_sync(goal_tactic_async)

@@ -6,11 +6,21 @@ python data_parse_cycle0123.py \
     --use_mp False \
     --reverse_order True
 
+# Kangjie 8 GPUs
 ulimit -s unlimited;
 python data_parse_cycle0123.py \
-    --use_mp False \
+    --use_mp True \
     --reverse_order True \
-    --num_processes 
+    --num_processes 24 \
+    --reverse_order False
+
+# Main 8 GPUs
+ulimit -s unlimited;
+python data_parse_cycle0123.py \
+    --use_mp True \
+    --reverse_order True \
+    --num_processes 8 \
+    --reverse_order Ture
 ```
 
 ## Bug

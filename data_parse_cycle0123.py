@@ -252,10 +252,7 @@ async def async_worker(
                 if not set(deductive_state.goals[0].variables).issubset(set(forward_state.goals[0].variables)):
                     logger.warning(f'¬(deductive_state ⊆ forward_state): {deductive_state.goals[0].variables}, {forward_state.goals[0].variables}')
                 break
-            try:
-                deductive_state = await server.tactic_server.goal_tactic_async(deductive_state, 0, chosen_action.step)
-            except:
-                import pdb; pdb.set_trace()
+            deductive_state = await server.tactic_server.goal_tactic_async(deductive_state, 0, chosen_action.step)
             G.remove_node(available_actions[0])
         
         finished_list[idx] = ProblemGenerationProcess(
