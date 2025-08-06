@@ -682,3 +682,13 @@ def remove_min_whitespace(s: str) -> str:
         else:
             result.append(line)
     return '\n'.join(result)
+
+def normalize_draft(s: str) -> str:
+    s_normalized = re.sub(
+        r':=\s*sorry', r':= sorry',
+            re.sub(
+        r':=\s*by\s+sorry', r':= sorry',
+        remove_comments(s)
+    )).strip()
+    s_filled = re.sub(r'have\s+:', r'have this :', s_normalized)
+    return '\n'.join(l for l in s_filled.splitlines() if l.strip() != '')

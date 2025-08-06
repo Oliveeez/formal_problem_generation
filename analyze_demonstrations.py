@@ -17,59 +17,10 @@ from loguru import logger
 import matplotlib.pyplot as plt
 
 from common.constants import BANNED_TOKENS_IN_ANSWER_TYPE, BANNED_TOKENS_IN_SOLVING_STATE, CORE_OPTIONS, FPS_GLOBAL_SETTING, OPEN_HEADER
-from common.pantograph.dataclasses import Goal, GoalState, Variable, CompilationUnit, TacticDraft, FormalProblem, SolutionAutoformalizationResult
+from common.pantograph.dataclasses import Goal, GoalState, Variable, CompilationUnit, TacticDraft, FormalProblem, SolutionAutoformalizationResult, ProblemGenerationStep
 from common.pantograph.server import Server, TacticFailure
 from common.pantograph.solving_server import PersistentPropSolvingServer
-from common.utils import remove_comments, normalize_spaces, format_forward_solution_step_prompt, replace_span, chunk_list, parse_idents, remove_min_whitespace
-
-# FPS_GLOBAL_SETTING['TO_SYNC_ENABLED'] = True
-
-
-@D.dataclass(frozen=True)
-class ProblemGenerationStep:
-    step_draft: str
-    proof: Optional[Tuple[str]]
-    new_contexts: Optional[Tuple[Variable]] # Newly introduced contexts (excluding removed old contexts, including newly-modified contexts)
-
-    def __post__init__(self):
-        self.proof = tuple(self.proof)
-        self.new_contexts = tuple(self.new_contexts)
-
-    @property
-    def is_introducing(self):
-        return self.proof is None
-    
-    @property
-    def is_deducing(self):
-        return not self.is_introducing and not self.is_submitting
-
-    @property
-    def is_submitting(self):
-        return self.new_contexts is None
-    
-    @property
-    def step(self):
-        if self.proof is None:
-            return self.step_draft.replace('native_decide', 'rfl')
-        else:
-            normalized_step_draft = normalize_draft(self.step_draft)
-            matches = list(re.finditer(':= sorry', normalized_step_draft))
-            assert len(matches) == len(self.proof)
-            for (m, p) in reversed(list(zip(matches, self.proof))):
-                normalized_step_draft = replace_span(m.span(), ':= by {\n' + p + '\n}', normalized_step_draft)
-            return normalized_step_draft.replace('native_decide', 'rfl')
-
-
-def normalize_draft(s: str) -> str:
-    s_normalized = re.sub(
-        r':=\s*sorry', r':= sorry',
-            re.sub(
-        r':=\s*by\s+sorry', r':= sorry',
-        remove_comments(s)
-    )).strip()
-    s_filled = re.sub(r'have\s+:', r'have this :', s_normalized)
-    return '\n'.join(l for l in s_filled.splitlines() if l.strip() != '')
-
+from common.utils import remove_comments, normalize_spaces, format_forward_solution_step_prompt, replace_span, chunk_list, parse_idents, remove_min_whitespace, normalize_draft
 
 
 async def worker(sample: SolutionAutoformalizationResult, tag: str):
@@ -122,9 +73,10 @@ async def worker(sample: SolutionAutoformalizationResult, tag: str):
                 # edge (u, v): v depends on u
                 dependency_graph.add_edge(u, v)
 
+    # Depednency between proof scripts
     for i_step, (_, draft_step) in enumerate(solution_transitions[:-1]):
         # 1. Execute current step
-        normalized_draft_step = normalize_draft(draft_step).replace('native_decide', 'rfl')
+        normalized_draft_step = normalize_draft(draft_step)
         if 'sorry' in parse_idents(normalized_draft_step):
             new_forward_state = await server.tactic_server.goal_tactic_async(forward_state, 0, TacticDraft('by\n' + normalized_draft_step + '\nsorry'))
         else:
@@ -166,7 +118,7 @@ async def worker(sample: SolutionAutoformalizationResult, tag: str):
         # 4. (Optional) Validate assumption: forward_state.goals[0].variables is topologically sorted
         tmp_parsing_state = forward_state
         while len(tmp_parsing_state.goals[0].variables) > 0:
-            tmp_parsing_state = await server.tactic_server.goal_tactic_async(tmp_parsing_state, 0, f'clear {tmp_parsing_state.goals[0].variables[-1].name}')
+            tmp_parsing_state = await server.tactic_server.goal_tactic_async(tmp_parsing_state, 0, f'clear! {tmp_parsing_state.goals[0].variables[-1].name}')
         assert str(tmp_parsing_state) == '⊢ False'
         
         # 5. Analyze dependency
@@ -183,19 +135,22 @@ async def worker(sample: SolutionAutoformalizationResult, tag: str):
             # No. Because this clearing is in reversed order. If some variable `u` is dependent on `v`
             # - Case 1. `s` does not depend on `u`: `u` is already removed
             # - Case 2. `s` depends on `u`: it does not matter if we still connect `v` with `u`.
+            # TODO: 08.05 - Current impl. is not reversed order. try clear!
 
             # 5.1. Find v
             v_to_remove = [vv for vv in tmp_parsing_state.goals[0].variables if vv.raw_name == v.raw_name]
+            if len(v_to_remove) == 0:
+                continue
             assert len(v_to_remove) == 1    # `tmp_parsing_state` is constructed by iteratively removing variables in forward_state, thus must find exactly one
             v_to_remove = v_to_remove[0]
             
             # 5.1. Try removing `v`
             if '✝' not in v.name:
                 try:
-                    new_tmp_parsing_state = await server.tactic_server.goal_tactic_async(tmp_parsing_state, 0, f'clear {v.name}')
+                    new_tmp_parsing_state = await server.tactic_server.goal_tactic_async(tmp_parsing_state, 0, f'clear! {v.name}')
                 except TacticFailure:
                     soft_dependencies.add(v.raw_name)
-                    logger.info(f'Cannot remove {v} ({[vv.name for vv in parsed_steps[fvarid_to_istep[v.raw_name]].new_contexts]})')
+                    logger.warning(f'Cannot remove {v} ({[vv.name for vv in parsed_steps[fvarid_to_istep[v.raw_name]].new_contexts]})')
                     continue
             else:
                 n_inaccessible_after = 0
@@ -212,10 +167,11 @@ async def worker(sample: SolutionAutoformalizationResult, tag: str):
                 assert len(all_to_temove) == 1 and all_to_temove[0].raw_name == v_to_remove.raw_name
                 
                 try:
-                    new_tmp_parsing_state = await server.tactic_server.goal_tactic_async(tmp_parsing_state, 0, f'clear _TMP_NAME_TO_REMOVE')
+                    new_tmp_parsing_state = await server.tactic_server.goal_tactic_async(tmp_parsing_state, 0, f'clear! _TMP_NAME_TO_REMOVE')
+                    # Try clear!
                 except TacticFailure:
                     soft_dependencies.add(v.raw_name)
-                    logger.info(f'Cannot remove {v} ({[vv.name for vv in parsed_steps[fvarid_to_istep[v.raw_name]].new_contexts]})')
+                    logger.warning(f'Cannot remove {v} ({[vv.name for vv in parsed_steps[fvarid_to_istep[v.raw_name]].new_contexts]})')
                     continue
             
             # Step 2. Try executing cur_step
@@ -230,6 +186,8 @@ async def worker(sample: SolutionAutoformalizationResult, tag: str):
             logger.info(f'Removed {v} ({[vv.name for vv in parsed_steps[fvarid_to_istep[v.raw_name]].new_contexts]})')
         logger.info(f'Final removing state: {test_tmp_parsing_state}')
         # 6. Iteration end
+        if len(soft_dependencies) > 0:
+            logger.warning(f'len(soft_dependencies) > 0: {soft_dependencies}')
         for d in I.chain(soft_dependencies, hard_dependencies):
             # edge (u, v): v depends on u
             logger.info(f'Adding dependency: {[vv.name for vv in parsed_steps[fvarid_to_istep[d]].new_contexts]} -> {[vv.name for vv in cur_step.new_contexts]}')
@@ -299,6 +257,7 @@ async def worker(sample: SolutionAutoformalizationResult, tag: str):
     nx.write_graphml(direct_dependency_graph, f'./direct_dependency_graph.{tag}.graphml')
     # ## Exploratory Action Sequence Reassembling
 
+    # TODO: Maybe ablation, rethinking whether the depth works.
     depth_dict = {n : 0 for n in parsed_steps}
 
     for u in nx.topological_sort(reduced_dependency_graph):

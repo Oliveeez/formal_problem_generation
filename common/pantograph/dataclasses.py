@@ -9,8 +9,9 @@ import networkx as nx
 from loguru import logger
 from openai.types import CompletionUsage
 from dacite import from_dict
+import msgspec
 
-from common.utils import parse_expr, unique, to_comment
+from common.utils import parse_expr, unique, to_comment, normalize_draft, replace_span
 from common.constants import Expr
 
 
@@ -230,7 +231,8 @@ class TacticDraft:
     """
     expr: str
 
-Tactic = Union[str, TacticHave, TacticLet, TacticCalc, TacticExpr, TacticDraft]
+# Tactic = Union[str, TacticHave, TacticLet, TacticCalc, TacticExpr, TacticDraft]
+Tactic = str
 
 @dataclass(frozen=True)
 class TacticInvocation:
@@ -535,3 +537,60 @@ class SolutionAutoformalizationResult(FormalProblem):
             'success' : self.success,
             'token_usages': {k : v.serialize() for k, v in self.token_usages.items()}
         }
+
+# @dataclass(frozen=True)
+class ProblemGenerationStep(msgspec.Struct, frozen=True):
+    step_draft: str
+    proof: Optional[Tuple[str]]
+    new_contexts: Optional[Tuple[Variable]] # Newly introduced contexts (excluding removed old contexts, including newly-modified contexts)
+
+    # def __post__init__(self):
+    #     self.proof = tuple(self.proof)
+    #     self.new_contexts = tuple(self.new_contexts)
+
+    @property
+    def is_introducing(self):
+        return self.proof is None and not self.is_submitting
+    
+    @property
+    def is_deducing(self):
+        return not self.is_introducing and not self.is_submitting
+
+    @property
+    def is_submitting(self):
+        return self.new_contexts is None
+    
+    @property
+    def step(self):
+        if self.proof is None:
+            return self.step_draft
+        else:
+            normalized_step_draft = normalize_draft(self.step_draft)
+            matches = list(re.finditer(':= sorry', normalized_step_draft))
+            assert len(matches) == len(self.proof)
+            for (m, p) in reversed(list(zip(matches, self.proof))):
+                normalized_step_draft = replace_span(m.span(), ':= by {\n' + p + '\n}', normalized_step_draft)
+            return normalized_step_draft
+
+# @dataclass
+class ProblemGenerationProcess(msgspec.Struct):
+    # Informal information
+    informal_problem: str
+    informal_answer: str
+    informal_solution: str
+    
+    # Formal statement
+    header: str
+    formal_statement: str
+    
+    # Formal deductive solution
+    formal_solution_draft: str
+    formal_proofs: List[List[Tuple[int, str]]]
+
+    # Parse Results
+    steps: List[ProblemGenerationStep]
+    dependencies: List[Tuple[int, int]]
+    trajectory: List[Tuple[List[Variable], int]]
+
+    # Meta information (should be organized in json)
+    metainfo: str
