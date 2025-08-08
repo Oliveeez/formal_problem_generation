@@ -84,6 +84,9 @@ FALSIFY_TACTICS = ['aesop', 'simp_all', 'abel', 'noncomm_ring', 'ring', 'module'
 
 SYSTEM_PROMPT_SFT = 'You are a Lean 4 expert.'
 
+SYSTEM_PROMPT_FPG = '''You are an Olympiad problem setter and a Lean 4 expert.
+You revel in conjuring elegant problems — starting from a spare set of hypotheses, you let rigorous deduction lead you to surprising and beautiful conclusions.'''
+
 IDENT_MAP = {
     'sqrt' : 'Real.sqrt',
     'sin' : 'Real.sin',

@@ -580,11 +580,11 @@ class ProblemGenerationProcess(msgspec.Struct):
     informal_solution: str
     
     # Formal statement
-    header: str
+    header: Optional[str]
     formal_statement: str
     
     # Formal deductive solution
-    formal_solution_draft: str
+    formal_solution_draft: Optional[str]
     formal_proofs: List[str]
 
     # Parse Results
