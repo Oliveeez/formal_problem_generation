@@ -1,0 +1,50 @@
+### model
+model_name_or_path: /home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-32B
+trust_remote_code: true
+print_param_status: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: full
+
+### dataset
+dataset: cycle123_problem_generation_steps
+template: qwen3
+cutoff_len: 4096  # 8192 costs 2x time (crash!); 4096: 12.5h
+train_on_prompt: false
+max_samples: null
+overwrite_cache: true
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+packing: true
+neat_packing: false
+
+### output
+output_dir: /cache/train_ckpts_llama-factory/Goedel-Prover-V2-32B.cycle123_problem_generation_steps
+logging_steps: 10
+save_steps: -1
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: swanlab  # choices: [none, wandb, tensorboard, swanlab, mlflow]
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-5
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+ddp_timeout: 180000000
+resume_from_checkpoint: null
+
+pure_bf16: true
+flash_attn: fa2
+
+### eval
+# eval_dataset: alpaca_en_demo
+# val_size: 0.1
+# per_device_eval_batch_size: 1
+# eval_strategy: steps
+# eval_steps: 500

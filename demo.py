@@ -26,7 +26,7 @@ FPS_GLOBAL_SETTING['TO_SYNC_ENABLED'] = True
 server = PersistentPropSolvingServer(
     imports=["Mathlib", "Aesop"],
     project_path='/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/data/MiniF2F',
-    timeout=120,
+    timeout=300,
     _sync_init=False,
 )
 
