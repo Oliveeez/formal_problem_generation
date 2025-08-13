@@ -18,9 +18,9 @@ from easydict import EasyDict
 import vllm
 from transformers import AutoTokenizer
 
-from common.constants import BANNED_TOKENS, CODEBLOCK_PATTERN
+from common.constants import BANNED_TOKENS, CODEBLOCK_PATTERN, SYSTEM_PROMPT_FPG
 from common.pantograph.server import PersistentServer, TacticFailure, ServerError
-from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, GoalState, TacticDraft, Variable
+from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
 from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code
 from agent.proof_search import ProofSearchResult, ProofSearchAgent
 
@@ -373,3 +373,176 @@ class AutoregressiveProblemGenerationAgent:
 
         return result
 
+class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAgent):
+    def __init__(
+        self,
+        gen_client: AsyncOpenAI,
+        gen_model_name: str,
+        *args,
+        max_search_trials: int=100,
+        num_max_samples_per_trial: int=32,
+        temperature: Optional[float]=None,
+        max_tokens: int=-1,
+        **kwargs
+    ) -> None:
+        super().__init__(max_search_trials)
+        if len(args) > 0 or len(kwargs) > 0:
+            logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
+
+        self.gen_client = gen_client
+        self.gen_model_name = gen_model_name
+        self.num_max_samples_per_trial = num_max_samples_per_trial
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+
+    @abstractmethod
+    def gen_prompt(
+        self,
+        state: GoalState,
+        conditions: Any,
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
+
+    @abstractmethod
+    def parse_step(
+        self,
+        response: str
+    ) -> ProblemGenerationStep:
+        """
+        Parse the step from generation results
+        """
+
+    async def gen_step_async(
+            self,
+            state: GoalState,
+            conditions: Any,
+        ) -> str:
+        """
+        Given the current state and conditions, try at most `self.num_max_samples_per_trial` times to generate one step.
+        """
+        # Generate tactics
+        for _ in range(self.num_max_samples_per_trial):
+            try:
+                if 'internlm' in self.gen_model_name.lower():
+                    outputs = (await self.gen_client.chat.completions.create(
+                        model=self.gen_model_name,
+                        messages=self.gen_prompt(state=state, conditions=conditions),
+                        max_tokens=(self.max_tokens if (self.max_tokens != NOT_GIVEN and self.max_tokens > 0) else NOT_GIVEN),
+                        stream=False,
+                        temperature=self.temperature,
+                        n=1,
+                        stop='<|im_end|>'
+                    )).choices
+                else:
+                    outputs = (await self.gen_client.chat.completions.create(
+                        model=self.gen_model_name,
+                        messages=self.gen_prompt(state=state, conditions=conditions),
+                        max_tokens=(self.max_tokens if (self.max_tokens != NOT_GIVEN and self.max_tokens > 0) else NOT_GIVEN),
+                        stream=False,
+                        temperature=self.temperature,
+                        n=1,
+                    )).choices
+            except Exception as e:
+                logger.debug(f'gen_steps_async(): Failed to generate tactics due to {repr(e)}')
+                continue
+            
+            # Neglect failed generations
+            if not outputs[0].finish_reason == 'stop':
+                logger.debug(f'gen_steps_async(): Tactic rejected due to abnormal finishing: {outputs[0].finish_reason}')
+                continue
+
+            try:
+                step = self.parse_step(outputs[0].message.content)
+            except Exception as e:
+                logger.debug(f'parse_step(): Failed due to {repr(e)}')
+                continue
+            step_code = step.step
+            if any(banned_token in step_code for banned_token in BANNED_TOKENS[1:]):   # Assuming the first banned token is `sorry`
+                logger.warning(f'gen_steps_async(): Tactic `{step_code}` rejected due to bannded token.')
+                continue
+            return step
+        raise RuntimeError('LLM calling budget exceeded')
+
+class SFT_LLMAutoregressiveProblemGenerationAgent(LLMAutoregressiveProblemGenerationAgent):
+    def gen_prompt(
+        self,
+        state: GoalState,
+        conditions: Tuple[str, str],
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
+        problem_type, source = conditions
+        context = ''
+        vars_to_format = [v for v in state.goals[0].variables]
+        while len(vars_to_format) > 0:
+            for i in range(len(vars_to_format)):
+                if i + 1 == len(vars_to_format) or not (vars_to_format[i].t == vars_to_format[i+1].t and vars_to_format[i].v is None and vars_to_format[i+1].v is None):
+                    break
+            if i == 0:
+                context += str(vars_to_format[0]) + '\n'
+                vars_to_format.pop(0)
+            else:
+                context += ' '.join([v.name if v.name is not None else "_" for v in vars_to_format[:i+1]]) + f' : {vars_to_format[0].t}\n'
+                vars_to_format = vars_to_format[i+1:]
+        
+        prompt = f'''Given a Lean 4 context, propose the single most natural next step to explore toward a beautiful conclusion — either
+- derive a new intermediate fact,
+- introduce a fresh variable or hypothesis, or
+- submit one of the local facts as the final answer.
+
+Requirements
+1. Flavoured {problem_type} and suitable for posting on forums about {source}.
+2. Fully formal Lean 4 code (inline comments in natural language are fine for planning and reasoning). Assume `import Mathlib`.
+
+
+# Lean 4 Context
+```lean4
+{context.rstrip()}
+```
+'''
+        return [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT_FPG
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+
+
+    def parse_step(
+        self,
+        response: str
+    ) -> ProblemGenerationStep:
+        """
+        Parse the step from generation results
+        """
+        step_category, step_code = response.strip().split('\n', 1)
+        assert step_category.startswith('# Step ') and step_code.startswith('```') and step_code.endswith('```'), f'Unable to parse step: {response}'
+        step_category = step_category[len('# Step ')]
+        step_code = '\n'.join(step_code.splitlines()[1:-1])
+        if step_category == ProblemGenerationStepCategory.Derive:
+            return ProblemGenerationStep(
+                step_draft=step_code,
+                proof=[],
+                new_contexts=[]
+            )
+        elif step_category == ProblemGenerationStepCategory.Introduce:
+            return ProblemGenerationStep(
+                step_draft=step_code,
+                proof=None,
+                new_contexts=[]
+            )
+        elif step_category == ProblemGenerationStepCategory.Submit:
+            return ProblemGenerationStep(
+                step_draft=step_code,
+                proof=None,
+                new_contexts=None
+            )
+        else:
+            raise RuntimeError(f'Unable to parse step category: {step_category}')

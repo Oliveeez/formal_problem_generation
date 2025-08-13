@@ -539,7 +539,7 @@ class SolutionAutoformalizationResult(FormalProblem):
             'token_usages': {k : v.serialize() for k, v in self.token_usages.items()}
         }
 
-class StepCategory(Enum):
+class ProblemGenerationStepCategory(Enum):
     Derive = 'Derive'
     Introduce = 'Introduce'
     Submit = 'Submit'
@@ -566,8 +566,8 @@ class ProblemGenerationStep(msgspec.Struct, frozen=True):
     def is_submitting(self) -> bool:
         return self.new_contexts is None
     
-    def category(self) -> StepCategory:
-        return StepCategory.Derive if self.is_deducing else StepCategory.Introduce if self.is_introducing else StepCategory.Submit
+    def category(self) -> ProblemGenerationStepCategory:
+        return ProblemGenerationStepCategory.Derive if self.is_deducing else ProblemGenerationStepCategory.Introduce if self.is_introducing else ProblemGenerationStepCategory.Submit
     
     @property
     def step(self) -> str:

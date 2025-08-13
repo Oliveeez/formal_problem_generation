@@ -25,32 +25,32 @@ PROBLEM_KEYS = set(['informal_problem', 'informal_answer', 'informal_solution'])
 
 # For generator
 BANNED_TOKENS = [
-        'sorry',
-        'admit',
-        'stop',
-        
-        'slim_check',   # If slim_check successfully tests 100 examples, it acts like admit. If it gives up or finds a counter-example, it reports an error.
-        
-        # Tactics that may break the proof state by forcefully closing the goals
-        'apply?',       # `rw?`` should not be left in proofs; it is a search tool, like `apply?`.
-        'rw?',
-        'hint',
-        'rw_search',
-        
-        # Tactics that are also search tools, but does not break proof states
-        'change?',
-        'have?',
-        'says',
-        'try_this',
-        'unfold?',
-        
-        # unsafe axioms: even though they are not sound, the kernel will not let us use them for regular proofs.
-        'lcErased',
-        'lcProof',
-        'lcCast',
-        'lcUnreachable',
-        'Quot.lcInv'
-    ]
+    'sorry',
+    'admit',
+    'stop',
+    
+    'slim_check',   # If slim_check successfully tests 100 examples, it acts like admit. If it gives up or finds a counter-example, it reports an error.
+    
+    # Tactics that may break the proof state by forcefully closing the goals
+    'apply?',       # `rw?`` should not be left in proofs; it is a search tool, like `apply?`.
+    'rw?',
+    'hint',
+    'rw_search',
+    
+    # Tactics that are also search tools, but does not break proof states
+    'change?',
+    'have?',
+    'says',
+    'try_this',
+    'unfold?',
+    
+    # unsafe axioms: even though they are not sound, the kernel will not let us use them for regular proofs.
+    'lcErased',
+    'lcProof',
+    'lcCast',
+    'lcUnreachable',
+    'Quot.lcInv'
+]
 assert BANNED_TOKENS[0] == 'sorry'  # The first banned token should be `sorry` (required by `agent/solution_search.py`)
 
 # For problem autoformalization
