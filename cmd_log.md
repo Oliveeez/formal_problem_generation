@@ -37,6 +37,19 @@ accelerate launch \
 --config_file /home/ma-user/workspace/formal_problem_generation/formal_problem_generation/train_recipes/fsdp.yaml \
 src/train.py /home/ma-user/workspace/formal_problem_generation/formal_problem_generation/train_recipes/Goedel-Prover-V2-32B.Numina1.5_nonsynth.Cycle123.0808.yaml
 ```
+# Inference
+```shell
+export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3;
+python -m vllm.entrypoints.openai.api_server \
+    --model /sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
+    --port 37210 \
+    --dtype bfloat16 \
+    --tensor_parallel_size 4 \
+    --api-key cycle0123_goedel \
+    --trust-remote-code \
+    --enable-prefix-caching \
+    --disable-log-requests
+```
 
 ## Bug
 ```lean4

@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field, fields
 from typing import Union, Tuple, List, Dict, Any, Optional
+from enum import Enum
 import json
 import regex as re
 import collections as C
@@ -11,7 +12,7 @@ from openai.types import CompletionUsage
 from dacite import from_dict
 import msgspec
 
-from common.utils import parse_expr, unique, to_comment, normalize_draft, replace_span
+from common.utils import parse_expr, unique, to_comment, normalize_draft, replace_span, remove_comment
 from common.constants import Expr
 
 
@@ -119,7 +120,7 @@ class GoalState:
             'state_id': self.state_id,
             'goals': [g.serialize() for g in self.goals],
             'payload': self.payload,
-            '_sentinel': self._sentinel,
+            '_sentinel': [],
         }
 
     def __del__(self):
@@ -538,6 +539,11 @@ class SolutionAutoformalizationResult(FormalProblem):
             'token_usages': {k : v.serialize() for k, v in self.token_usages.items()}
         }
 
+class StepCategory(Enum):
+    Derive = 'Derive'
+    Introduce = 'Introduce'
+    Submit = 'Submit'
+
 # @dataclass(frozen=True)
 class ProblemGenerationStep(msgspec.Struct, frozen=True):
     step_draft: str
@@ -549,21 +555,24 @@ class ProblemGenerationStep(msgspec.Struct, frozen=True):
     #     self.new_contexts = tuple(self.new_contexts)
 
     @property
-    def is_introducing(self):
+    def is_introducing(self) -> bool:
         return self.proof is None and not self.is_submitting
     
     @property
-    def is_deducing(self):
+    def is_deducing(self) -> bool:
         return not self.is_introducing and not self.is_submitting
 
     @property
-    def is_submitting(self):
+    def is_submitting(self) -> bool:
         return self.new_contexts is None
     
+    def category(self) -> StepCategory:
+        return StepCategory.Derive if self.is_deducing else StepCategory.Introduce if self.is_introducing else StepCategory.Submit
+    
     @property
-    def step(self):
+    def step(self) -> str:
         if self.proof is None:
-            return self.step_draft
+            return remove_comment(self.step_draft)
         else:
             normalized_step_draft = normalize_draft(self.step_draft)
             matches = list(re.finditer(':= sorry', normalized_step_draft))
@@ -571,6 +580,13 @@ class ProblemGenerationStep(msgspec.Struct, frozen=True):
             for (m, p) in reversed(list(zip(matches, self.proof))):
                 normalized_step_draft = replace_span(m.span(), ':= by {\n' + p + '\n}', normalized_step_draft)
             return normalized_step_draft
+    
+    def __str__(self) -> str:
+        return f'''{self.category}
+```lean4
+{self.step.rstrip()}
+```
+'''
 
 # @dataclass
 class ProblemGenerationProcess(msgspec.Struct):
