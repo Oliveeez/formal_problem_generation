@@ -17,11 +17,41 @@ from transformers import AutoTokenizer
 
 from common.constants import BANNED_TOKENS, API_TIMEOUT, CODEBLOCK_PATTERN
 from common.pantograph.server import Server, TacticFailure, ServerError
-from common.pantograph.dataclasses import TacticHave, TacticLet, Tactic, GoalState, Goal, ProofSearchState, ProofSearchResult
+from common.pantograph.dataclasses import TacticHave, TacticLet, Tactic, GoalState, Goal, ProofSearchState, ProofGenerationResult, ProofSearchResult
 from common.utils import zip_strict, remove_comments, normalize_spaces
 
 
-class ProofSearchAgent:
+class ProofGenerationAgent:
+    """
+    A template agent for proof generation
+    """
+    @abstractmethod
+    async def search_async(self,
+        server: Server,
+        init_state: GoalState,
+        tag: str='',
+        verbose: bool=False,
+        ignored_goals: List[Goal]=[] # Only works for goals that are not coupled w/ the first goal and are the last in the list 
+    ) -> ProofGenerationResult:
+        pass
+
+class WholeProofGenerationAgent(ProofGenerationAgent):
+    """
+    A template agent for proof generation
+    """
+    @abstractmethod
+    async def search_async(self,
+        server: Server,
+        init_state: GoalState,
+        tag: str='',
+        verbose: bool=False,
+        ignored_goals: List[Goal]=[] # Only works for goals that are not coupled w/ the first goal and are the last in the list 
+    ) -> ProofGenerationResult:
+        pass
+
+
+
+class ProofSearchAgent(ProofGenerationAgent):
     """
     A template best-first search agent for proof search. (The heuristic hasn't been implemented)
     """

@@ -327,15 +327,11 @@ class ProofSearchState:
         return ([] if self.parent is None else self.parent.state_history) + [self.state]
 
 @dataclass(frozen=True)
-class ProofSearchResult:
+class ProofGenerationResult:
     duration: float
     success: bool
     proof: List[Tuple[int, Tactic]] = field(default_factory=list) # List of tactics (and additional information, e.g. proofs of `have`s) in the proof
-    final_state: Optional[GoalState] = None
-        # Since sometimes we ignore some tailing goals and focus on the main goals,
-        # After solving all of them, the ignored goals should be in `final_state`.
-    states: List[GoalState] = field(default_factory=list)
-
+    
     def serialize(self) -> Dict:
         return {
             'duration': self.duration,
@@ -344,6 +340,17 @@ class ProofSearchResult:
                 'goal_id': i,
                 'proof_step': t
             } for (i, t) in self.proof],
+        }
+
+@dataclass(frozen=True)
+class ProofSearchResult(ProofGenerationResult):
+    final_state: Optional[GoalState] = None
+        # Since sometimes we ignore some tailing goals and focus on the main goals,
+        # After solving all of them, the ignored goals should be in `final_state`.
+    states: List[GoalState] = field(default_factory=list)
+
+    def serialize(self) -> Dict:
+        return super().serialize() | {
             'final_state': None if self.final_state is None else self.final_state.serialize(),
             'states': [s.serialize() for s in self.states],
         }
