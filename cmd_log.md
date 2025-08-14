@@ -79,24 +79,28 @@ done
 
 # Agent Run
 ulimit -s unlimited;
-python -m evaluator.fps_problem_generation \
+python -m evaluator.fpg_problem_generation \
     --log_root output/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
-    --agent_name sft_ar \
-    --base_url http://0.0.0.0:37212/v1 \
-    --api_key cycle0123_dspv2 \
-    --model_name /sfs/liuqi/ckpts/hf_ckpts/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
-    --resume_from output/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
-    --num_concurrency 16
-
-ulimit -s unlimited;
-python -m evaluator.fps_problem_generation \
-    --log_root output/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
     --agent_name sft_ar \
     --base_url http://0.0.0.0:37210/v1 \
     --api_key cycle0123_dspv2 \
+    --model_name /sfs/liuqi/ckpts/hf_ckpts/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
+    --n_servers 4 \
+    --num_generation_attempt 10 \
+    --resume_from output/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
+    --num_concurrency 96
+
+ulimit -s unlimited;
+python -m evaluator.fpg_problem_generation \
+    --log_root output/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
+    --agent_name sft_ar \
+    --base_url http://0.0.0.0:37210/v1 \
+    --api_key cycle0123_goedel \
     --model_name /sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
+    --n_servers 4 \
+    --num_generation_attempt 10 \
     --resume_from output/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
-    --num_concurrency 8
+    --num_concurrency 64
 ```
 
 ## Bug

@@ -550,7 +550,8 @@ Requirements
         """
         Parse the step from generation results
         """
-        step_category, step_code = response.strip().split('\n', 1)
+        start_pos = max(0, response.find('# Step'))
+        step_category, step_code = response[start_pos:].strip().split('\n', 1)
         assert step_category.startswith('# Step ') and step_code.startswith('```') and step_code.endswith('```'), f'Unable to parse step: {response}'
         step_category = ProblemGenerationStepCategory(step_category[len('# Step '):])
         step_code = '\n'.join(step_code.splitlines()[1:-1])

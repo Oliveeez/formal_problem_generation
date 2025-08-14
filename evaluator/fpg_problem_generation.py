@@ -68,6 +68,17 @@ def main(
     base_urls = [base_url]
     for _ in range(n_servers-1):
         base_urls.append(add_one_to_port(base_urls[-1]))
+    available_servers = [
+        PersistentServer(
+            is_state_based=True,
+            tag='',
+            _sync_init=False,
+            imports=["Mathlib", "Aesop"],
+            project_path=project_root,
+            core_options=CORE_OPTIONS,
+            timeout=300,
+        ) for i in range(num_concurrency)
+    ]
 
     # Load data
     tasks = list(I.product(
@@ -94,36 +105,36 @@ def main(
             logger.critical(f'Resumed {len(finished)} results from {osp.join(resume_from, load_file)}, now remaining {len(tasks)} tasks to evaluate.')
 
     async def generate_worker(condition: Any, key: Any, tag_i: int) -> None:
-        client = AsyncOpenAI(
-            base_url=base_urls[tag_i % len(base_urls)],
-            api_key=api_key
-        )
-        problem_generator: ProblemGenerationAgent = AGENT_DICT[agent_name](
-            gen_client=client,
-            gen_model_name=model_name,
-            max_search_trials=max_search_trials,
-            num_max_samples_per_trial=num_max_samples_per_trial,
-            temperature=temperature,
-            max_tokens=(max_tokens if max_tokens > 0 else NOT_GIVEN)
-        )
-        result = await problem_generator.generate_async(
-            conditions=condition,
-            server=PersistentServer(
-                is_state_based=True,
-                tag=f'{tag_i}',
-                _sync_init=False,
-                imports=["Mathlib", "Aesop"],
-                project_path=project_root,
-                core_options=CORE_OPTIONS,
-                timeout=300,
-            ),
-            reassemble_trajectory=reassemble_trajectory,
-            tag=str(tag_i),
-            verbose=False,
-        )
-        
-        logger.info(f'generate_worker({tag_i}, {condition}): generation finished: {result.formal_statement}')
-        finished[key] = result
+        server = available_servers.pop()
+        try:
+            server.tag = str(tag_i)
+            client = AsyncOpenAI(
+                base_url=base_urls[tag_i % len(base_urls)],
+                api_key=api_key
+            )
+            problem_generator: ProblemGenerationAgent = AGENT_DICT[agent_name](
+                gen_client=client,
+                gen_model_name=model_name,
+                max_search_trials=max_search_trials,
+                num_max_samples_per_trial=num_max_samples_per_trial,
+                temperature=temperature,
+                max_tokens=(max_tokens if max_tokens > 0 else NOT_GIVEN)
+            )
+            result = await problem_generator.generate_async(
+                conditions=condition,
+                server=server,
+                reassemble_trajectory=reassemble_trajectory,
+                tag=str(tag_i),
+                verbose=False,
+            )
+            
+            logger.info(f'generate_worker({tag_i}, {condition}): generation finished: {result.formal_statement}')
+            finished[key] = result
+        except Exception as e:
+            logger.info(f'generate_worker({tag_i}, {condition}): generation failed due to: {repr(e)}\n{traceback.format_exc()}')
+        finally:
+            server.tag = ''
+            available_servers.insert(0, server)
 
     async def _async_main():
         pending_tasks: Set[asyncio.Task] = set()

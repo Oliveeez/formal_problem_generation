@@ -174,7 +174,7 @@ def chunk_list(data: list, chunksize: int):
         # logger.info(f'chunk_list(): Yielding chunk {i}...')
         yield (i, data[i:i + chunksize])
 
-def add_one_to_port(input_string):
+def add_one_to_port(input_string: str) -> str:
     match = re.findall(r'\d+', input_string)
     
     if match:
