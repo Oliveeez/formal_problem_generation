@@ -358,10 +358,10 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                             falsify_problem_state = await server.goal_tactic_async(new_problem_state, 0, 'try ' + tac)
                             assert not falsify_problem_state.is_solved, 'Introduced contradiction'
                     else:
-                        raise RuntimeError()
+                        raise RuntimeError(cur_step)
                     assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
                 except Exception as e:
-                    logger.debug(f'Search({tag}): {i_trial}/{self.max_search_trials}, step {cur_step.category} failed due to {e}')
+                    logger.debug(f'Search({tag}): {i_trial}/{self.max_search_trials}, step {cur_step.category} failed due to {repr(e)}')
                     continue
 
 

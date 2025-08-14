@@ -80,7 +80,8 @@ ANSWER_PATTERN = re.compile(r"\\boxed{(.*?)}")
 CODEBLOCK_PATTERN = re.compile(r'```(?:.*?)\n(.*?)```', flags=re.DOTALL)
 
 RPE_TACTICS = ['rfl', 'norm_num', 'ring_nf', 'rw_search', 'aesop']
-FALSIFY_TACTICS = ['aesop', 'simp_all', 'abel', 'noncomm_ring', 'ring', 'module', 'nlinarith!']
+# FALSIFY_TACTICS = ['aesop', 'simp_all', 'abel', 'noncomm_ring', 'ring', 'module', 'nlinarith!']
+FALSIFY_TACTICS = ['aesop']
 
 SYSTEM_PROMPT_SFT = 'You are a Lean 4 expert.'
 

@@ -17,6 +17,7 @@ from openai import AsyncOpenAI, NOT_GIVEN
 from tqdm import tqdm
 from loguru import logger
 from fire import Fire
+import aiofiles
 
 from common.constants import FPS_GLOBAL_SETTING, CORE_OPTIONS
 from common.utils import add_one_to_port
@@ -141,8 +142,8 @@ def main(
         for i, (condition, i_generation) in enumerate(tasks):
             if len(pending_tasks) >= num_concurrency:
                 done_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
-                with open(osp.join(log_root, log_prefix+now+'.pkl'), 'wb') as f:
-                    pickle.dump(finished, f)
+                async with aiofiles.open(osp.join(log_root, log_prefix+now+'.pkl'), 'wb') as f:
+                    await f.write(pickle.dumps(finished))
                 for task in done_tasks:
                     if task.exception() is not None:
                         logger.error(f"Exception occurred: {task.exception()} {task.get_stack()}")
