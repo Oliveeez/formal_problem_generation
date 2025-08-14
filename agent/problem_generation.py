@@ -554,23 +554,44 @@ Requirements
         assert step_category.startswith('# Step ') and step_code.startswith('```') and step_code.endswith('```'), f'Unable to parse step: {response}'
         step_category = ProblemGenerationStepCategory(step_category[len('# Step '):])
         step_code = '\n'.join(step_code.splitlines()[1:-1])
-        
-        match step_category:
-            case ProblemGenerationStepCategory.Derive:
+
+        if step_category == ProblemGenerationStepCategory.Derive:
                 return ProblemGenerationStep(
                     step_draft=step_code,
                     proof=[],
                     new_contexts=[]
                 )
-            case ProblemGenerationStepCategory.Introduce:
+        elif step_category == ProblemGenerationStepCategory.Introduce:
                 return ProblemGenerationStep(
                     step_draft=step_code,
                     proof=None,
                     new_contexts=[]
                 )
-            case ProblemGenerationStepCategory.Submit:
+        elif step_category == ProblemGenerationStepCategory.Submit:
                     return ProblemGenerationStep(
                         step_draft=step_code,
                         proof=None,
                         new_contexts=None
                     )
+        else:
+            raise RuntimeError(step_category)
+
+        # match step_category:
+        #     case ProblemGenerationStepCategory.Derive:
+        #         return ProblemGenerationStep(
+        #             step_draft=step_code,
+        #             proof=[],
+        #             new_contexts=[]
+        #         )
+        #     case ProblemGenerationStepCategory.Introduce:
+        #         return ProblemGenerationStep(
+        #             step_draft=step_code,
+        #             proof=None,
+        #             new_contexts=[]
+        #         )
+        #     case ProblemGenerationStepCategory.Submit:
+        #             return ProblemGenerationStep(
+        #                 step_draft=step_code,
+        #                 proof=None,
+        #                 new_contexts=None
+        #             )
