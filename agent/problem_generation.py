@@ -18,20 +18,44 @@ from easydict import EasyDict
 import vllm
 from transformers import AutoTokenizer
 
-from common.constants import BANNED_TOKENS, CODEBLOCK_PATTERN, SYSTEM_PROMPT_FPG
+from common.constants import BANNED_TOKENS, CODEBLOCK_PATTERN, SYSTEM_PROMPT_FPG, FALSIFY_TACTICS
 from common.pantograph.server import PersistentServer, TacticFailure, ServerError
 from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
 from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code
 from agent.proof_search import ProofSearchResult, ProofSearchAgent
 
-
-class AutoregressiveProblemGenerationAgent:
+class ProblemGenerationAgent:
     """
     A template autoregessive problem generation agent.
     """
 
-    def __init__(self, max_search_trials: int) -> None:
+    def __init__(self, *args, **kwargs) -> None:
+        if len(args) > 0 or len(kwargs) > 0:
+            logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
+    
+    @abstractmethod
+    async def generate_async(
+            self,
+            conditions: Any,
+            server: PersistentServer,
+            reassemble_trajectory: bool=False,
+            tag: str='',
+            verbose: bool=False,
+        ) -> ProblemGenerationProcess:
+        """
+        Problem generation.
+        """
+
+class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
+    """
+    A template autoregessive problem generation agent.
+    """
+
+    def __init__(self, max_search_trials: int, *args, **kwargs) -> None:
+        super().__init__()
         self.max_search_trials = max_search_trials
+        if len(args) > 0 or len(kwargs) > 0:
+            logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
 
     @abstractmethod
     async def gen_step_async(
@@ -60,6 +84,7 @@ class AutoregressiveProblemGenerationAgent:
     ) -> ProblemGenerationProcess:
         try:
             # Initialize
+            # breakpoint()
             steps = result.steps
             assert len(states) == len(steps)
             assert steps[-1].is_submitting and steps[-1].step.startswith('submit_answer ')
@@ -89,7 +114,7 @@ class AutoregressiveProblemGenerationAgent:
                 # 3. (Optional) Validate assumption: forward_state.goals[0].variables is topologically sorted
                 tmp_state = problem_state
                 while len(tmp_state.goals[0].variables) > 0:
-                    tmp_state = await server.tactic_server.goal_tactic_async(tmp_state, 0, f'clear! {tmp_state.goals[0].variables[-1].name}')
+                    tmp_state = await server.goal_tactic_async(tmp_state, 0, f'clear! {tmp_state.goals[0].variables[-1].name}')
                 assert str(tmp_state) == '⊢ False', str(tmp_state)
                 
                 # 4. Analyze dependency
@@ -111,7 +136,7 @@ class AutoregressiveProblemGenerationAgent:
                     # 4.2. Try removing `v`
                     if '✝' not in v_to_remove.name:
                         try:
-                            new_tmp_state = await server.tactic_server.goal_tactic_async(tmp_state, 0, f'clear! {v_to_remove.name}')
+                            new_tmp_state = await server.goal_tactic_async(tmp_state, 0, f'clear! {v_to_remove.name}')
                         except TacticFailure as e:
                             soft_dependencies.add(v_to_remove.raw_name)
                             logger.warning(f'analyze_async({tag}): Cannot remove {v_to_remove} ({[vv.name for vv in steps[fvarid_to_istep[v_to_remove.raw_name]].new_contexts]})')
@@ -126,13 +151,13 @@ class AutoregressiveProblemGenerationAgent:
                                     n_inaccessible_after += 1
                         assert all(vv.name != '_TMP_NAME_TO_REMOVE' for vv in tmp_state.goals[0].variables), str(tmp_state)
                         
-                        new_tmp_state = await server.tactic_server.goal_tactic_async(tmp_state, 0, f'rename_i _TMP_NAME_TO_REMOVE' + ' _' * n_inaccessible_after)
+                        new_tmp_state = await server.goal_tactic_async(tmp_state, 0, f'rename_i _TMP_NAME_TO_REMOVE' + ' _' * n_inaccessible_after)
                         
                         all_to_temove = [vv for vv in new_tmp_state.goals[0].variables if vv.name == '_TMP_NAME_TO_REMOVE']
                         assert len(all_to_temove) == 1 and all_to_temove[0].raw_name == v_to_remove.raw_name, f'all_to_temove={all_to_temove}, v_to_remove={v_to_remove}'
                         
                         try:
-                            new_tmp_state = await server.tactic_server.goal_tactic_async(new_tmp_state, 0, f'clear! _TMP_NAME_TO_REMOVE')
+                            new_tmp_state = await server.goal_tactic_async(new_tmp_state, 0, f'clear! _TMP_NAME_TO_REMOVE')
                             # Try clear!
                         except TacticFailure as e:
                             soft_dependencies.add(v_to_remove.raw_name)
@@ -141,7 +166,7 @@ class AutoregressiveProblemGenerationAgent:
                     
                     # 4.3. Try executing cur_step
                     try:
-                        test_tmp_state = await server.tactic_server.goal_tactic_async(new_tmp_state, 0, cur_step.step)
+                        test_tmp_state = await server.goal_tactic_async(new_tmp_state, 0, cur_step.step)
                         tmp_state = new_tmp_state
                     except TacticFailure as e:
                         hard_dependencies.add(v_to_remove.raw_name)
@@ -159,15 +184,15 @@ class AutoregressiveProblemGenerationAgent:
                     # logger.info(f'analyze_async({tag}): Adding dependency: {[vv.name for vv in parsed_steps[fvarid_to_istep[d]].new_contexts]} -> {[vv.name for vv in cur_step.new_contexts]}')
                     dependency_graph.add_edge(fvarid_to_istep[d], i_step)
                 
-                problem_state = new_problem_state
+                # problem_state = new_problem_state
 
-            submission_fvar = [v for v in steps[-1].new_contexts if v.name == submission_name]
+            submission_fvar = [v for v in result.trajectory[-1][0] if v.name == submission_name]
             assert len(submission_fvar) == 1, f'submission_name={submission_name}, new_context={[v.name for v in steps[-1].new_contexts]}'
             submission_fvar = submission_fvar[0]
             dependency_graph.add_node(len(steps)-1)
             
             for (i, s) in reversed(list(enumerate(steps))):
-                if submission_fvar.raw_name in [v.raw_name for v in s.new_contexts]:
+                if s.new_contexts is not None and submission_fvar.raw_name in [v.raw_name for v in s.new_contexts]:
                     dependency_graph.add_edge(i, len(steps)-1)
                     break
             assert dependency_graph.in_degree(len(steps)-1) == 1, f'dependency_graph.in_degree(submission_step)={dependency_graph.in_degree(len(steps))}'
@@ -185,7 +210,7 @@ class AutoregressiveProblemGenerationAgent:
                 
                 reassembled_trajectory = []
                 G = reduced_dependency_graph.copy()
-                deductive_state = await server.tactic_server.load_statement_async('False')
+                deductive_state = await server.load_statement_async('False')
                 
                 # TODO: Shall we conduct backward-dfs to collect all nodes that `answer` needs?
                 # TODO: the current setting (depth-first) can encourage models to explore!
@@ -200,7 +225,7 @@ class AutoregressiveProblemGenerationAgent:
                         if not set(deductive_state.goals[0].variables).issubset(set(problem_state.goals[0].variables)):
                             logger.warning(f'analyze_async({tag}): ¬(deductive_state ⊆ forward_state): {deductive_state.goals[0].variables}, {problem_state.goals[0].variables}')
                         break
-                    deductive_state = await server.tactic_server.goal_tactic_async(deductive_state, 0, chosen_action.step)
+                    deductive_state = await server.goal_tactic_async(deductive_state, 0, chosen_action.step)
                     G.remove_node(available_actions[0])
                 
                 result.metainfo['original_trajectory'] = [([v.serialize() for v in S], i_s) for (S, i_s) in result.trajectory]
@@ -214,13 +239,14 @@ class AutoregressiveProblemGenerationAgent:
     async def validate_async(
         self,
         result: ProblemGenerationProcess,
-        steps: List[ProblemGenerationStep],
         server: PersistentServer,
         tag: str='',
     ) -> bool:
         try:
+            # breakpoint()
+            steps = result.steps
             submission_name = steps[-1].step[len('submit_answer '):]
-            submission_fvar = [v for v in steps[-1].new_contexts if v.name == submission_name]
+            submission_fvar = [v for v in result.trajectory[-1][0] if v.name == submission_name]
             assert len(submission_fvar) == 1, f'submission_name={submission_name}, new_context={[v.name for v in steps[-1].new_contexts]}'
             submission_fvar = submission_fvar[0]
             
@@ -229,7 +255,7 @@ class AutoregressiveProblemGenerationAgent:
             #* Maybe we can use fvarid and new_context to locate!
             problem_hypotheses = [f'  ({v.name} : {v.t})' for s in steps if s.is_introducing for v in s.new_contexts]
             formal_solution = '\n\n'.join([s.step for s in steps if s.is_deducing] + [steps[-1].step.replace('submit_answer ', 'exact ')])
-            result.formal_statement = 'example\n' + '\n'.join(problem_hypotheses) + '\n: ' + submission_fvar.t
+            result.formal_statement = 'example\n' + '\n'.join(problem_hypotheses) + '\n: ' + submission_fvar.t + '\n:= sorry'
             result.formal_solution_draft = formal_solution
         except Exception as e:
             logger.warning(f'validate_async({tag}): Initialization failed due to {repr(e)}')
@@ -237,8 +263,8 @@ class AutoregressiveProblemGenerationAgent:
 
         # Validate statement and proof
         try:
-            formal_statement = 'example ∀\n' + '\n'.join(problem_hypotheses) + '\n, ' + submission_fvar.t
-            init_validation_state = await server.load_statement_async('example ∀\n' + '\n'.join(problem_hypotheses) + '\n, ' + submission_fvar.t, intros=[v.name for s in steps if s.is_introducing for v in s.new_contexts])
+            formal_statement = '∀\n' + '\n'.join(problem_hypotheses) + '\n, ' + submission_fvar.t
+            init_validation_state = await server.load_statement_async(formal_statement, intros=[v.name for s in steps if s.is_introducing for v in s.new_contexts])
             result.metainfo['is_statement_validated'] = True
         except Exception as e:
             logger.warning(f'validate_async({tag}): Statement validation failed due to {repr(e)}: {formal_statement}')
@@ -253,7 +279,7 @@ class AutoregressiveProblemGenerationAgent:
         
         return True
 
-    async def search_async(
+    async def generate_async(
             self,
             conditions: Any,
             server: PersistentServer,
@@ -270,7 +296,6 @@ class AutoregressiveProblemGenerationAgent:
         time_start = time.time()
         states: List[GoalState] = []
         steps: List[ProblemGenerationStep] = []
-        # trajectory: List[Tuple[List[Variable], int]] = []
         
         cur_problem_state = await server.load_statement_async('False')
         states.append(cur_problem_state)
@@ -284,7 +309,7 @@ class AutoregressiveProblemGenerationAgent:
                 assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
                 
                 cur_step = await self.gen_step_async(cur_problem_state, conditions)
-                log(f'Search({tag}): {i_trial}/{self.max_search_trials}, {str(cur_step)}')
+                log(f'Search({tag}): {i_trial}/{self.max_search_trials}, Condition {conditions}, State\n{cur_problem_state}\nStep {str(cur_step)}')
                 
                 if cur_step.is_submitting:
                     step_code = remove_comments(cur_step.step).strip()
@@ -309,7 +334,6 @@ class AutoregressiveProblemGenerationAgent:
                     )
                     is_valid = await self.validate_async(
                         result=result,
-                        steps=steps,
                         server=server,
                         tag=tag,
                     )
@@ -330,6 +354,9 @@ class AutoregressiveProblemGenerationAgent:
                         new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, TacticDraft('by\n' + cur_step.step + '\nsorry'))
                     elif cur_step.is_introducing:
                         new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
+                        for tac in FALSIFY_TACTICS: # TODO: Stricter falsify check? (e.g. using prover model) - Maybe final check?
+                            falsify_problem_state = await server.goal_tactic_async(new_problem_state, 0, 'try ' + tac)
+                            assert not falsify_problem_state.is_solved, 'Introduced contradiction'
                     else:
                         raise RuntimeError()
                     assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
@@ -382,7 +409,7 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
         max_search_trials: int=100,
         num_max_samples_per_trial: int=32,
         temperature: Optional[float]=None,
-        max_tokens: int=-1,
+        max_tokens: int=NOT_GIVEN,
         **kwargs
     ) -> None:
         super().__init__(max_search_trials)
@@ -423,12 +450,13 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
         Given the current state and conditions, try at most `self.num_max_samples_per_trial` times to generate one step.
         """
         # Generate tactics
+        prompt = self.gen_prompt(state=state, conditions=conditions)
         for _ in range(self.num_max_samples_per_trial):
             try:
                 if 'internlm' in self.gen_model_name.lower():
                     outputs = (await self.gen_client.chat.completions.create(
                         model=self.gen_model_name,
-                        messages=self.gen_prompt(state=state, conditions=conditions),
+                        messages=prompt,
                         max_tokens=(self.max_tokens if (self.max_tokens != NOT_GIVEN and self.max_tokens > 0) else NOT_GIVEN),
                         stream=False,
                         temperature=self.temperature,
@@ -438,7 +466,7 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
                 else:
                     outputs = (await self.gen_client.chat.completions.create(
                         model=self.gen_model_name,
-                        messages=self.gen_prompt(state=state, conditions=conditions),
+                        messages=prompt,
                         max_tokens=(self.max_tokens if (self.max_tokens != NOT_GIVEN and self.max_tokens > 0) else NOT_GIVEN),
                         stream=False,
                         temperature=self.temperature,
@@ -524,25 +552,25 @@ Requirements
         """
         step_category, step_code = response.strip().split('\n', 1)
         assert step_category.startswith('# Step ') and step_code.startswith('```') and step_code.endswith('```'), f'Unable to parse step: {response}'
-        step_category = step_category[len('# Step ')]
+        step_category = ProblemGenerationStepCategory(step_category[len('# Step '):])
         step_code = '\n'.join(step_code.splitlines()[1:-1])
-        if step_category == ProblemGenerationStepCategory.Derive:
-            return ProblemGenerationStep(
-                step_draft=step_code,
-                proof=[],
-                new_contexts=[]
-            )
-        elif step_category == ProblemGenerationStepCategory.Introduce:
-            return ProblemGenerationStep(
-                step_draft=step_code,
-                proof=None,
-                new_contexts=[]
-            )
-        elif step_category == ProblemGenerationStepCategory.Submit:
-            return ProblemGenerationStep(
-                step_draft=step_code,
-                proof=None,
-                new_contexts=None
-            )
-        else:
-            raise RuntimeError(f'Unable to parse step category: {step_category}')
+        
+        match step_category:
+            case ProblemGenerationStepCategory.Derive:
+                return ProblemGenerationStep(
+                    step_draft=step_code,
+                    proof=[],
+                    new_contexts=[]
+                )
+            case ProblemGenerationStepCategory.Introduce:
+                return ProblemGenerationStep(
+                    step_draft=step_code,
+                    proof=None,
+                    new_contexts=[]
+                )
+            case ProblemGenerationStepCategory.Submit:
+                    return ProblemGenerationStep(
+                        step_draft=step_code,
+                        proof=None,
+                        new_contexts=None
+                    )

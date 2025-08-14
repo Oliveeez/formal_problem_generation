@@ -62,7 +62,7 @@ async def get_lean_path_async(project_path):
     )
     return p
 
-get_lean_path = to_sync(get_lean_path_async)
+get_lean_path = to_sync(get_lean_path_async, force=True)
 
 class TacticFailure(Exception):
     """
@@ -96,7 +96,7 @@ class Server:
         self.timeout = timeout
         self.imports = imports
         self.project_path = project_path if project_path else _get_proc_cwd()
-        if _sync_init and project_path and not lean_path:
+        if project_path and not lean_path:
             lean_path = get_lean_path(project_path)
         self.lean_path = lean_path
         self.maxread = maxread
@@ -555,6 +555,7 @@ class PersistentServer:
         self.server_args = args
         self.server_kwargs = kwargs
         self.count = float('inf')
+        self.server = Server(*self.server_args, **(self.server_kwargs | {'_sync_init': False}))
         if _sync_init:
             self.check_restart()
 
@@ -563,7 +564,7 @@ class PersistentServer:
             return
         
         logger.debug(f'PersistentServer({self.tag}): Restarting...')
-        self.server = await Server.create(*self.server_args, **self.server_kwargs)
+        await self.server.restart_async()
 
         if self.is_state_based:
             units = await self.server.load_sorry_async('''example : True := sorry''')
@@ -575,7 +576,7 @@ class PersistentServer:
     check_restart = to_sync(check_restart_async)
 
     @record_server_error
-    async def load_statement_async(self, statement: str, intros: List[str]=[], header: str='') -> GoalState :
+    async def load_statement_async(self, statement: str, intros: List[str]=[], header: str='') -> GoalState:
         await self.check_restart_async()
         assert self.is_state_based, f'PersistentServer({self.tag}): load_statement_async() must be used w/ state-based.'
 

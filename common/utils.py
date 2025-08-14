@@ -585,10 +585,10 @@ async def temporarily_modify_code_async(
             async with aiofiles.open(path, 'w') as f:
                 await f.write(content_backup)
 
-def to_sync(func):
+def to_sync(func, force: bool=False):
     @F.wraps(func)
     def wrapper(*args, **kwargs):
-        if not FPS_GLOBAL_SETTING['TO_SYNC_ENABLED']:
+        if not force and not FPS_GLOBAL_SETTING['TO_SYNC_ENABLED']:
             raise RuntimeError('to_sync() is not enabled in common.constants.FPS_GLOBAL_SETTING')
         return asyncio.get_event_loop().run_until_complete(func(*args, **kwargs))
     return wrapper

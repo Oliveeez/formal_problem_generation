@@ -12,7 +12,7 @@ from openai.types import CompletionUsage
 from dacite import from_dict
 import msgspec
 
-from common.utils import parse_expr, unique, to_comment, normalize_draft, replace_span, remove_comment
+from common.utils import parse_expr, unique, to_comment, normalize_draft, replace_span, remove_comments
 from common.constants import Expr
 
 
@@ -545,7 +545,7 @@ class ProblemGenerationStepCategory(Enum):
     Submit = 'Submit'
 
 # @dataclass(frozen=True)
-class ProblemGenerationStep(msgspec.Struct, frozen=True):
+class ProblemGenerationStep(msgspec.Struct):
     step_draft: str
     proof: Optional[List[str]]
     new_contexts: Optional[List[Variable]] # Newly introduced contexts (excluding removed old contexts, including newly-modified contexts)
@@ -566,13 +566,14 @@ class ProblemGenerationStep(msgspec.Struct, frozen=True):
     def is_submitting(self) -> bool:
         return self.new_contexts is None
     
+    @property
     def category(self) -> ProblemGenerationStepCategory:
         return ProblemGenerationStepCategory.Derive if self.is_deducing else ProblemGenerationStepCategory.Introduce if self.is_introducing else ProblemGenerationStepCategory.Submit
     
     @property
     def step(self) -> str:
         if self.proof is None:
-            return remove_comment(self.step_draft)
+            return remove_comments(self.step_draft)
         else:
             normalized_step_draft = normalize_draft(self.step_draft)
             matches = list(re.finditer(':= sorry', normalized_step_draft))
@@ -582,7 +583,7 @@ class ProblemGenerationStep(msgspec.Struct, frozen=True):
             return normalized_step_draft
     
     def __str__(self) -> str:
-        return f'''{self.category}
+        return f'''{self.category.value}
 ```lean4
 {self.step.rstrip()}
 ```

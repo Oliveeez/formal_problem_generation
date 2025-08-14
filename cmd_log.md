@@ -39,6 +39,18 @@ src/train.py /home/ma-user/workspace/formal_problem_generation/formal_problem_ge
 ```
 # Inference
 ```shell
+# Load LLM
+export ASCEND_RT_VISIBLE_DEVICES=2;
+python -m vllm.entrypoints.openai.api_server \
+    --model /sfs/liuqi/ckpts/hf_ckpts/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
+    --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+    --dtype bfloat16 \
+    --api-key cycle0123_dspv2 \
+    --trust-remote-code \
+    --enable-prefix-caching \
+    --disable-log-requests \
+    --max-model-len 8192
+
 export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3;
 python -m vllm.entrypoints.openai.api_server \
     --model /sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
@@ -48,7 +60,20 @@ python -m vllm.entrypoints.openai.api_server \
     --api-key cycle0123_goedel \
     --trust-remote-code \
     --enable-prefix-caching \
-    --disable-log-requests
+    --disable-log-requests \
+    --max-model-len 8192
+
+# Agent Run
+ulimit -s unlimited;
+python -m evaluator.fps_problem_generation \
+    --log_root output/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
+    --agent_name sft_ar \
+    --base_url http://0.0.0.0:37212/v1 \
+    --api_key cycle0123_dspv2 \
+    --model_name /sfs/liuqi/ckpts/hf_ckpts/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
+    --resume_from output/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
+    --num_concurrency 1
+
 ```
 
 ## Bug
