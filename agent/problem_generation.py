@@ -22,7 +22,7 @@ from common.constants import BANNED_TOKENS, CODEBLOCK_PATTERN, SYSTEM_PROMPT_FPG
 from common.pantograph.server import PersistentServer, TacticFailure, ServerError
 from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
 from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code
-from agent.proof_search import ProofSearchResult, ProofSearchAgent
+from agent.proof_generation import ProofSearchResult, ProofSearchAgent
 
 class ProblemGenerationAgent:
     """

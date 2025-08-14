@@ -25,7 +25,7 @@ from fire import Fire
 from common.constants import CORE_OPTIONS, BANNED_TOKENS, PROBLEM_KEYS
 from common.pantograph.dataclasses import FormalProblem, ProofSearchResult
 from common.pantograph.solving_server import TermSolvingServer
-from agent.proof_search import ProofSearchResult
+from agent.proof_generation import ProofSearchResult
 from common.utils import remove_comments
 
 

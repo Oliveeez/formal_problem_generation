@@ -25,8 +25,8 @@ from common.constants import PROBLEM_KEYS
 from common.pantograph.dataclasses import GoalState, FormalProblem, TacticInvocation, ProofSearchResult
 from common.pantograph.server import Server, ServerError
 from common.pantograph.solving_server import TermSolvingServer
-from agent.proof_search import ProofSearchResult
-from agent.proof_search import ProofSearchAgent, SFT_NALP_AVGGOAL_LLMProofSearchAgent, DummyProofSearchAgent, LeanSTaR_NALP_AVGGOAL_LLMProofSearchAgent, StepProver_NALP_AVGGOAL_LLMProofSearchAgent, StepProver_Critic_AVGGOAL_LLMProofSearchAgent
+from agent.proof_generation import ProofSearchResult
+from agent.proof_generation import ProofSearchAgent, SFT_NALP_AVGGOAL_LLMProofSearchAgent, DummyProofSearchAgent, LeanSTaR_NALP_AVGGOAL_LLMProofSearchAgent, StepProver_NALP_AVGGOAL_LLMProofSearchAgent, StepProver_Critic_AVGGOAL_LLMProofSearchAgent
 from common.utils import remove_comments, normalize_spaces
 
 MODEL_DICT = {

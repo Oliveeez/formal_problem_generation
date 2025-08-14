@@ -25,7 +25,7 @@ from common.pantograph.server import PersistentServer, TacticFailure, ServerErro
 from common.pantograph.solving_server import PropSolvingServer, PersistentBaseSolvingServer, format_variable_sequence, UnsatisfiableProblemError
 from common.pantograph.dataclasses import TacticHave, TacticLet, Tactic, GoalState, Goal, TokenUsage, DataPoint, FormalProblem, SolutionAutoformalizationResult, TacticDraft
 from common.utils import zip_strict, remove_comments, to_sync, remove_spaces, replace_sorry
-from agent.proof_search import ProofSearchResult, ProofSearchAgent
+from agent.proof_generation import ProofSearchResult, ProofSearchAgent
 
 
 class SolutionAutoformalizer:

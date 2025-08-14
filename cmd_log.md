@@ -72,8 +72,17 @@ python -m evaluator.fps_problem_generation \
     --api_key cycle0123_dspv2 \
     --model_name /sfs/liuqi/ckpts/hf_ckpts/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
     --resume_from output/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
-    --num_concurrency 1
+    --num_concurrency 16
 
+ulimit -s unlimited;
+python -m evaluator.fps_problem_generation \
+    --log_root output/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
+    --agent_name sft_ar \
+    --base_url http://0.0.0.0:37210/v1 \
+    --api_key cycle0123_dspv2 \
+    --model_name /sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
+    --resume_from output/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
+    --num_concurrency 8
 ```
 
 ## Bug

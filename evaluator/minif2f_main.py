@@ -26,8 +26,8 @@ from fire import Fire
 from common.constants import CORE_OPTIONS, OPEN_HEADER
 from common.pantograph.dataclasses import GoalState
 from common.pantograph.server import Server, ServerError
-from agent.proof_search import ProofSearchResult
-from agent.proof_search import ProofSearchAgent, HammerProofSearchAgent, StepProver_NALP_LLMProofSearchAgent, StepProver_Critic_LLMProofSearchAgent, SFT_NALP_LLMProofSearchAgent, SFT_NALP_AVGGOAL_LLMProofSearchAgent
+from agent.proof_generation import ProofSearchResult
+from agent.proof_generation import ProofSearchAgent, HammerProofSearchAgent, StepProver_NALP_LLMProofSearchAgent, StepProver_Critic_LLMProofSearchAgent, SFT_NALP_LLMProofSearchAgent, SFT_NALP_AVGGOAL_LLMProofSearchAgent
 
 
 MODEL_DICT = {

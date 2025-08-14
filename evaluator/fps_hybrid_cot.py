@@ -26,7 +26,7 @@ from common.constants import CORE_OPTIONS, BANNED_TOKENS, CODEBLOCK_PATTERN, RET
 from common.pantograph.dataclasses import ProofSearchResult, FormalProblem
 from common.pantograph.server import ServerError, TacticFailure
 from common.pantograph.solving_server import PropSolvingServer
-from agent.proof_search import ProofSearchResult
+from agent.proof_generation import ProofSearchResult
 from common.utils import remove_comments
 
 

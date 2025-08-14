@@ -39,7 +39,7 @@ class WholeProofGenerationAgent(ProofGenerationAgent):
     """
     A template agent for proof generation
     """
-    @abstractmethod
+    
     async def search_async(self,
         server: Server,
         init_state: GoalState,

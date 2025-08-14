@@ -26,7 +26,7 @@ from common.constants import CORE_OPTIONS, OPEN_HEADER, BANNED_TOKENS, MVAR_PATT
 from common.pantograph.dataclasses import GoalState, FormalProblem, TacticInvocation, ProofSearchResult
 from common.pantograph.server import Server, ServerError
 from common.pantograph.solving_server import PropSolvingServer
-from agent.proof_search import ProofSearchResult, HammerProofSearchAgent, StepProver_NALP_LLMProofSearchAgent, StepProver_Critic_LLMProofSearchAgent, SFT_NALP_LLMProofSearchAgent, SFT_NALP_AVGGOAL_LLMProofSearchAgent
+from agent.proof_generation import ProofSearchResult, HammerProofSearchAgent, StepProver_NALP_LLMProofSearchAgent, StepProver_Critic_LLMProofSearchAgent, SFT_NALP_LLMProofSearchAgent, SFT_NALP_AVGGOAL_LLMProofSearchAgent
 from agent.solution_autoregression import SFT_NALP_LLMSolutionAutoregressionAgent
 from common.utils import remove_comments, normalize_spaces
 

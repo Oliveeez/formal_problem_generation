@@ -26,7 +26,7 @@ from common.utils import chunk_list, add_one_to_port, remove_comments, normalize
 from common.pantograph.dataclasses import TacticDraft, SolutionAutoformalizationResult, ProblemGenerationStep, ProblemGenerationProcess
 from common.pantograph.server import PersistentServer, TacticFailure
 from common.pantograph.solving_server import PersistentPropSolvingServer
-from agent.proof_search import SFT_NALP_LLMProofSearchAgent
+from agent.proof_generation import SFT_NALP_LLMProofSearchAgent
 from agent.solution_autoformalization import SolutionAutoformalizer, SolutionAutoformalizationResult
 
 N_CONCURRENCY_PER_WORKER = 8

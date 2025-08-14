@@ -22,7 +22,7 @@ from common.pantograph.server import Server, TacticFailure, ServerError
 from common.pantograph.solving_server import PropSolvingServer
 from common.pantograph.dataclasses import TacticHave, TacticLet, TacticDraft, Tactic, GoalState, Goal, FormalProblem
 from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code
-from agent.proof_search import ProofSearchResult, ProofSearchAgent
+from agent.proof_generation import ProofSearchResult, ProofSearchAgent
 
 
 @dataclass(frozen=True)
