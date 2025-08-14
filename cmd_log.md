@@ -40,28 +40,42 @@ src/train.py /home/ma-user/workspace/formal_problem_generation/formal_problem_ge
 # Inference
 ```shell
 # Load LLM
-export ASCEND_RT_VISIBLE_DEVICES=2;
-python -m vllm.entrypoints.openai.api_server \
-    --model /sfs/liuqi/ckpts/hf_ckpts/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
-    --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
-    --dtype bfloat16 \
-    --api-key cycle0123_dspv2 \
-    --trust-remote-code \
-    --enable-prefix-caching \
-    --disable-log-requests \
-    --max-model-len 8192
+for i_experiment in 0 1 2 3
+do
+    export ASCEND_RT_VISIBLE_DEVICES=$i_experiment;
+    python -m vllm.entrypoints.openai.api_server \
+        --model /sfs/liuqi/ckpts/hf_ckpts/DeepSeek-Prover-V2-7B.Numina1.5_nonsynth.Cycle123.0808 \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key cycle0123_dspv2 \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 &
+done
 
-export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3;
-python -m vllm.entrypoints.openai.api_server \
-    --model /sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
-    --port 37210 \
-    --dtype bfloat16 \
-    --tensor_parallel_size 4 \
-    --api-key cycle0123_goedel \
-    --trust-remote-code \
-    --enable-prefix-caching \
-    --disable-log-requests \
-    --max-model-len 8192
+device_groups=("0,1" "2,3" "4,5" "6,7")
+port=37210
+for group in "${device_groups[@]}"
+do
+    echo "Port: $port, NPU: $group"
+    export ASCEND_RT_VISIBLE_DEVICES=$group;
+    
+    python -m vllm.entrypoints.openai.api_server \
+        --model /sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
+        --port $port \
+        --dtype bfloat16 \
+        --tensor_parallel_size 2 \
+        --api-key cycle0123_goedel \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 4096 &
+    
+    port=$((port + 1))
+done
+
+
 
 # Agent Run
 ulimit -s unlimited;

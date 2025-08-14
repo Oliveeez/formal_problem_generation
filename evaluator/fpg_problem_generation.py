@@ -19,6 +19,7 @@ from loguru import logger
 from fire import Fire
 
 from common.constants import FPS_GLOBAL_SETTING, CORE_OPTIONS
+from common.utils import add_one_to_port
 from common.pantograph.server import PersistentServer
 from agent.problem_generation import ProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgent
 
@@ -34,6 +35,7 @@ def main(
     base_url: str,
     api_key: str,
     model_name: str,
+    n_servers: int=1,   # Assuming all servers share the same ip and have consecutive ports
     project_root: str='/home/ma-user/workspace/fps_pantograph/formal_problem_solving/data/MiniF2F',
     num_generation_attempt: int=5,
     reassemble_trajectory: bool=False,
@@ -63,10 +65,9 @@ def main(
     problem_types_ood = ['Linear Algebra', 'Abstract Algebra', 'Real Analysis', 'Topology']
     sources_ood = ['Chinese Gaokao', 'IMO', 'Undergraduate Math Exam', 'Undergraduate Math Textbook', 'Graduate Math Exam', 'Graduate Math Textbook']
     
-    client = AsyncOpenAI(
-        base_url=base_url,
-        api_key=api_key
-    )
+    base_urls = [base_url]
+    for _ in range(n_servers-1):
+        base_urls.append(add_one_to_port(base_urls[-1]))
 
     # Load data
     tasks = list(I.product(
@@ -93,6 +94,10 @@ def main(
             logger.critical(f'Resumed {len(finished)} results from {osp.join(resume_from, load_file)}, now remaining {len(tasks)} tasks to evaluate.')
 
     async def generate_worker(condition: Any, key: Any, tag_i: int) -> None:
+        client = AsyncOpenAI(
+            base_url=base_urls[tag_i % len(base_urls)],
+            api_key=api_key
+        )
         problem_generator: ProblemGenerationAgent = AGENT_DICT[agent_name](
             gen_client=client,
             gen_model_name=model_name,
