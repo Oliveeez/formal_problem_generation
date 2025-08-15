@@ -99,7 +99,7 @@ async def worker(
 def main(
     n_concurrency: int=128,
     save_root: str='/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/data/MiniF2F/Numina-Lean',
-    reversed: bool=False,
+    reverse: bool=False,
 ) -> None:
     now = datetime.now().strftime("%Y%m%d-%H%M%S")
     logger.remove()
@@ -174,7 +174,7 @@ def main(
     async def _async_main():
         pending_tasks: Set[asyncio.Task] = set()
         loop = enumerate(parsed_datapoints)
-        if reversed:
+        if reverse:
             loop = reversed(list(loop))
         for i, d in tqdm(loop):
             if len(pending_tasks) >= n_concurrency:
