@@ -256,6 +256,14 @@ class TacticInvocation:
             used_constants=payload.get('usedConstants', []),
         )
 
+    def serialize(self) -> Dict:
+        return {
+            'before': self.before,
+            'after': self.after,
+            'tactic': self.tactic,
+            'used_constants': self.used_constants,
+        }
+
 @dataclass(frozen=True)
 class CompilationUnit:
 
@@ -303,6 +311,17 @@ class CompilationUnit:
             goal_src_boundaries,
             new_constants
         )
+    
+    def serialize(self) -> Dict:
+        return {
+            'i_begin': self.i_begin,
+            'i_end': self.i_end,
+            'messages': self.messages,
+            'invocations': None if self.invocations is None else [ivc.serialize() for ivc in self.invocations],
+            'goal_state': None if self.goal_state is None else self.goal_state.serialize(),
+            'goal_src_boundaries': None if self.goal_src_boundaries is None else self.goal_src_boundaries,
+            'new_constants': None if self.new_constants is None else self.new_constants,
+        }
 
 @dataclass(frozen=True)
 class ProofSearchState:
