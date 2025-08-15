@@ -21,7 +21,7 @@ from transformers import AutoTokenizer
 from common.constants import BANNED_TOKENS, CODEBLOCK_PATTERN, SYSTEM_PROMPT_FPG, FALSIFY_TACTICS
 from common.pantograph.server import PersistentServer, TacticFailure, ServerError
 from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
-from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code
+from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft
 from agent.proof_generation import ProofSearchResult, ProofSearchAgent
 
 class ProblemGenerationAgent:
@@ -312,13 +312,15 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                 log(f'Search({tag}): {i_trial}/{self.max_search_trials}, Condition {conditions}, State\n{cur_problem_state}\nStep {str(cur_step)}')
                 
                 if cur_step.is_submitting:
-                    step_code = remove_comments(cur_step.step).strip()
-                    assert step_code.startswith('submit_answer '), step_code
-                    submission_name = step_code[len('submit_answer '):]
+                    try:
+                        step_code = remove_comments(cur_step.step).strip()
+                        assert step_code.startswith('submit_answer '), step_code
+                        submission_name = step_code[len('submit_answer '):]
+                        assert submission_name in [v.name for v in cur_problem_state.goals[0].variables], f'submission_name={submission_name}, cur_problem_state={cur_problem_state}'
+                    except:
+                        logger.debug(f'Search({tag}): {i_trial}/{self.max_search_trials}, step {cur_step.category} failed due to {repr(e)}')
                     
-                    assert submission_name in [v.name for v in cur_problem_state.goals[0].variables], f'submission_name={submission_name}, cur_problem_state={cur_problem_state}'
                     steps.append(cur_step)
-                    
                     result = ProblemGenerationProcess(
                         informal_problem='',
                         informal_answer='',
@@ -557,23 +559,26 @@ Requirements
         step_code = '\n'.join(step_code.splitlines()[1:-1])
 
         if step_category == ProblemGenerationStepCategory.Derive:
-                return ProblemGenerationStep(
-                    step_draft=step_code,
-                    proof=[],
-                    new_contexts=[]
-                )
+            normalized_step_draft = normalize_draft(step_code)
+            matches = list(re.finditer(':= sorry', normalized_step_draft))
+            assert len(matches) == 0, normalized_step_draft
+            return ProblemGenerationStep(
+                step_draft=step_code,
+                proof=[],
+                new_contexts=[]
+            )
         elif step_category == ProblemGenerationStepCategory.Introduce:
+            return ProblemGenerationStep(
+                step_draft=step_code,
+                proof=None,
+                new_contexts=[]
+            )
+        elif step_category == ProblemGenerationStepCategory.Submit:
                 return ProblemGenerationStep(
                     step_draft=step_code,
                     proof=None,
-                    new_contexts=[]
+                    new_contexts=None
                 )
-        elif step_category == ProblemGenerationStepCategory.Submit:
-                    return ProblemGenerationStep(
-                        step_draft=step_code,
-                        proof=None,
-                        new_contexts=None
-                    )
         else:
             raise RuntimeError(step_category)
 

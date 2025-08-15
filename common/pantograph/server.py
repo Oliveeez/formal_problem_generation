@@ -621,6 +621,15 @@ class PersistentServer:
         return units
 
     @record_server_error
+    async def parse_proof_async(self, code: str) -> List[CompilationUnit]:
+        await self.check_restart_async()
+        assert not self.is_state_based, f'PersistentServer({self.tag}): parse_proof_async() must be used w/o/ state-based.'
+
+        # Assuming `statement` to a `example`, e.g. `example (x : Real) : x^2 >= 0 := sorry`
+        units = await self.server.parse_proof_async(code)
+        return units
+
+    @record_server_error
     async def goal_tactic_async(self, *args, **kwargs) -> GoalState:
         assert self.is_state_based, f'PersistentServer({self.tag}): goal_tactic_async() must be used w/ state-based.'
         return await self.server.goal_tactic_async(*args, **kwargs)

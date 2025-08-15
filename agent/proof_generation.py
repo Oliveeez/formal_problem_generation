@@ -35,11 +35,30 @@ class ProofGenerationAgent:
     ) -> ProofGenerationResult:
         pass
 
-class WholeProofGenerationAgent(ProofGenerationAgent):
+class LLMWholeProofGenerationAgent(ProofGenerationAgent):
     """
     A template agent for proof generation
     """
-    
+
+    @abstractmethod
+    def gen_prompt(
+        self,
+        state: GoalState,
+        conditions: Any,
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
+
+    @abstractmethod
+    def parse_step(
+        self,
+        response: str
+    ) -> str:
+        """
+        Parse the step from generation results
+        """
+
     async def search_async(self,
         server: Server,
         init_state: GoalState,
@@ -49,7 +68,23 @@ class WholeProofGenerationAgent(ProofGenerationAgent):
     ) -> ProofGenerationResult:
         pass
 
+class Kimina_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
+    def gen_prompt(
+        self,
+        state: GoalState,
+        conditions: Any,
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
 
+    def parse_step(
+        self,
+        response: str
+    ) -> str:
+        """
+        Parse the step from generation results
+        """
 
 class ProofSearchAgent(ProofGenerationAgent):
     """
