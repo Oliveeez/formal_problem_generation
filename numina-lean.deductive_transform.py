@@ -23,12 +23,51 @@ from loguru import logger
 from tqdm import tqdm
 
 from common.constants import OPEN_HEADER, CORE_OPTIONS, MVAR_PATTERN
-from common.utils import remove_comments, normalize_spaces, remove_spaces
+from common.utils import remove_comments, normalize_spaces, remove_spaces, normalize_draft
 from common.pantograph.dataclasses import TacticInvocation, Goal
 from common.pantograph.server import Server, PersistentServer, TacticFailure
 
 def is_deductive(ivc: dict) -> bool:
     return len(ivc['before']) == 1 and len(ivc['after']) == 1 and ivc['before'][0].split('⊢ ')[-1] == ivc['after'][0].split('⊢ ')[-1]
+
+
+# ANONYMOUS_PATTERN = re.compile(r'✝([⁰¹²³⁴⁵⁶⁷⁸⁹]+)')
+# superscript_to_digit = {
+#     '⁰': '0',
+#     '¹': '1',
+#     '²': '2',
+#     '³': '3',
+#     '⁴': '4',
+#     '⁵': '5',
+#     '⁶': '6',
+#     '⁷': '7',
+#     '⁸': '8',
+#     '⁹': '9'
+# }
+
+# # Regular expression to match "✝" followed by one or more superscript digits
+# def superscript_to_digit_replacement(match):
+#     """Helper function to perform the replacement."""
+#     superscripts = match.group(1)
+#     # Convert each superscript character to its corresponding digit
+#     regular_digits = ''.join(superscript_to_digit[char] for char in superscripts)
+#     return '_' + regular_digits
+
+# def transform_string(input_string: str) -> str:
+#     """
+#     Transforms a string by replacing occurrences of "✝" followed by superscript digits
+#     with an underscore followed by the corresponding regular digits.
+
+#     Args:
+#         input_string (str): The string to transform.
+
+#     Returns:
+#         str: The transformed string.
+#     """
+#     # Mapping of superscript characters to their corresponding regular digits
+#     # Replace all occurrences of the pattern in the input string
+#     transformed_string = ANONYMOUS_PATTERN.sub(superscript_to_digit_replacement, input_string)
+#     return transformed_string
 
 def match_wo_mvar(s_w_mvar: str, s_wo_mvar: str) -> str:
     s_w_mvar = normalize_spaces(s_w_mvar.replace('(', '').replace(')', ''))
@@ -37,6 +76,49 @@ def match_wo_mvar(s_w_mvar: str, s_wo_mvar: str) -> str:
     pattern = '^' + '.*?'.join(re.escape(part) for part in parts) + '.*?$'
     match = re.match(pattern, s_wo_mvar)
     return bool(match)
+
+bracket_pairings = {
+    '(' : ')',
+    '[' : ']',
+    '{' : '}',
+    '⦃' : '⦄'
+}
+
+def parse_variables(s : str) -> Tuple[str, str]:
+    base = 0
+    variables = []
+    target = None
+    while base < len(s):
+        if s[base] in ['(', '[', '{', '⦃']:
+            bracket_type = s[base]
+            bracket_pairing = bracket_pairings[bracket_type]
+        
+            stack_cnt = 0
+            start_end_positions = []
+
+            for i, char in enumerate(s[base:]):
+                if char == bracket_type:
+                    if stack_cnt == 0:
+                        start_position = i
+                    stack_cnt += 1
+                elif char == bracket_pairing:
+                    if stack_cnt > 0:
+                        stack_cnt -= 1
+                        if stack_cnt == 0:
+                            end_position = i
+                            start_end_positions.append((start_position, end_position))
+                            break
+            
+            start, end = start_end_positions[0]
+            variables.append(s[base+start:base+end+1])
+            base += i
+        else:
+            if s[base] == ':':
+                target = s[base+1:]
+                break
+            base += 1
+    
+    return variables, target
 
 async def worker(
     d: Dict,
@@ -75,43 +157,49 @@ async def worker(
         p_injected = '\n'.join(p_injected[:i]) + '\n\n' + '\n'.join('set_option ' + t.replace('=', ' ') for t in CORE_OPTIONS) + '\n\n' + '\n'.join(p_injected[i:])
 
         parsed_units = [i_u for i_u, u in enumerate(d['parse_result']['units']) if len(u['invocations'] or []) > 0]
-        results[idx] = [None for _ in range((len(parsed_units)))]
         logger.debug(f'worker({idx}): {len(parsed_units)} units to parse')
 
 
-        for i_u in parsed_units:
+        for i_p, i_u in enumerate(parsed_units):
             u = d['parse_result']['units'][i_u]
             try:
                 invocations = u['invocations']
-                assert len(invocations[0]['before']) == 1
+                assert len(invocations[0]['before']) == 1, 'Initial state contains multiple goals'
 
-                # Parse Context
-                context_str, target = invocations[0]['before'][0].split('⊢ ')
-                lines = context_str.splitlines()
-                context = []
-                for l in lines:
-                    if not l.startswith(' '):   # Multi-line variable produced by pretty-printer
-                        context.append(l)
-                    else:
-                        context[-1] = context[-1] + '\n' + l
+                code_segment = remove_comments(p_injected.encode()[u['i_begin']:u['i_end']].decode())
+                start_pos = None
+                for start_pos in re.finditer(r':=\s*by', code_segment):
+                    break
+                assert start_pos is not None, '":= by" not found'
+                statement_code, proof_code = code_segment[:start_pos.span(0)[0]], code_segment[start_pos.span(0)[1]:]
+
+                # Parse Context from statement code
+                context, target = parse_variables(statement_code)
+                assert target is not None, f'Target parsing failed: {statement_code}'
                 
                 # Parse intros
-                hypotheses = []
-                for c in context:
-                    var_names, var_type = c.split(' : ', 1)
-                    var_names = [n if '✝' not in n else '_' for n in var_names.split(' ')]
-                    hypotheses.append(var_names, var_type)
+                telescope = []
+                for declaration in context:
+                    if declaration[0] == '[':
+                        telescope.append((['_'], declaration[1:-1]))    #TODO: Now specifically process `[]` to follow `inst`. During training (propose condition from states), maybe it should be re-considered.
+                    else:
+                        assert '✝' not in declaration, f'declaration: {declaration}'
+                        var_names, var_type = declaration[1:-1].split(':', 1)
+                        # var_names = [n if '✝' not in n else '_' for n in var_names.strip().split(' ')]
+                        telescope.append((var_names.strip().split(' '), var_type.strip()))
                 
                 # Load statement
-                hypotheses = ('∀ ' + '\n'.join('(' + c + ')' for c in context) + '\n, ') if len(context) > 0 else ''
+                hypotheses = ('∀ ' + '\n'.join(
+                    '(' + ' '.join(var_names) + ' : ' + var_type + ')' if var_names != ['_'] else f'[{var_type}]' for (var_names, var_type) in telescope
+                ) + '\n, ') if len(context) > 0 else ''
                 formal_statement = hypotheses + target
-                assert '⊢' not in formal_statement
+                assert '⊢' not in formal_statement, '⊢ in formal_statement'
 
                 try:
-                    init_state = await server.load_statement_async(formal_statement, intros=intros, header=load_header)
+                    init_state = await server.load_statement_async(formal_statement, intros=list(I.chain(*[h[0] for h in telescope])), header=load_header)
                 except Exception as e:
-                    raise RuntimeError(formal_statement, intros, load_header) from e
-                assert all(match_wo_mvar(g_parsed, str(g_now)) for g_parsed, g_now in zip(invocations[0]['before'], init_state.goals))
+                    raise RuntimeError(telescope, load_header) from e
+                assert all(match_wo_mvar(g_parsed, str(g_now)) for g_parsed, g_now in zip(invocations[0]['before'], init_state.goals)), 'initial state not equivalent w/ parse results'
                 
                 # Start transforming
                 states: List[List[Goal]] = []
@@ -134,11 +222,11 @@ async def worker(
                         states.append(cur_state.goals[:])
                         try:
                             cur_state = await server.goal_tactic_async(cur_state, 0, ivc['tactic'])
-                            assert all(match_wo_mvar(g_parsed, str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals))
+                            assert all(match_wo_mvar(g_parsed, str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
                             steps.append(('', ivc['tactic']))
                         except:
                             cur_state = await server.goal_tactic_async(cur_state, 0, tactic_header + ivc['tactic'])
-                            assert all(match_wo_mvar(g_parsed, str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals))
+                            assert all(match_wo_mvar(g_parsed, str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
                             ivc
                             steps.append((tactic_header, ivc['tactic']))
                 else:
@@ -147,16 +235,8 @@ async def worker(
                 # Remaining non-deductive steps
                 
                 # 1. Extract remaining steps
-                deductive_code_wo_space = remove_spaces(''.join(s[1] for s in steps))
-                code_segment = remove_comments(p_injected.encode()[u['i_begin']:u['i_end']].decode())
-
-                start_pos = None
-                for start_pos in re.finditer(r':=\s*by', code_segment):
-                    break
-                assert start_pos is not None
-                proof_code = code_segment[start_pos.span(0)[1]:]
-
-                assert remove_spaces(proof_code).startswith(deductive_code_wo_space), 'TODO: Severe error!'
+                deductive_code_wo_space = remove_spaces(remove_comments('\n'.join(s[1] for s in steps)))
+                assert remove_spaces(proof_code).startswith(deductive_code_wo_space), 'remove_spaces(proof_code).startswith(deductive_code_wo_space) failed'
 
                 ptr_deductive_code = 0
                 ptr_proof_line = None
@@ -168,40 +248,43 @@ async def worker(
                     else:
                         break
 
-                assert ptr_deductive_code == len(deductive_code_wo_space)
+                assert ptr_deductive_code == len(deductive_code_wo_space), 'ptr_deductive_code != len(deductive_code_wo_space)'
 
                 # 2. Execute remaining steps
                 proof_state = cur_state
 
-                have_step = f'have h_submission: {cur_state.goals[0].target} := by {{\n' + '\n'.join(proof_lines[ptr_proof_line:]) + '\n}'
+                have_step = f'have h_submission: {target} := by {{\n' + '\n'.join(proof_lines[ptr_proof_line:]) + '\n}'
                 states.append(proof_state.goals[:])
                 try:
                     proof_state = await server.goal_tactic_async(proof_state, 0, have_step)
-                    assert (len(proof_state.goals) == 1 and proof_state.goals[0].target == cur_state.goals[0].target)
+                    assert (len(proof_state.goals) == 1 and proof_state.goals[0].target == cur_state.goals[0].target), '`have h_submission` failed due to proof state: ' + str(proof_state)
                     steps.append(('', have_step))
                 except:
                     proof_state = await server.goal_tactic_async(proof_state, 0, tactic_header + have_step)
-                    assert (len(proof_state.goals) == 1 and proof_state.goals[0].target == cur_state.goals[0].target)
+                    assert (len(proof_state.goals) == 1 and proof_state.goals[0].target == cur_state.goals[0].target), '`have h_submission` failed due to proof state: ' + str(proof_state)
                     steps.append((tactic_header, have_step))
 
                 states.append(proof_state.goals[:])
                 submit_step = 'exact h_submission'
                 try:
                     proof_state = await server.goal_tactic_async(proof_state, 0, submit_step)
-                    assert proof_state.is_solved
+                    assert proof_state.is_solved, '`exact h_submission` failed due to proof state: ' + str(proof_state)
                     steps.append(('', submit_step))
                 except:
                     proof_state = await server.goal_tactic_async(proof_state, 0, tactic_header + submit_step)
-                    assert proof_state.is_solved
+                    assert proof_state.is_solved, '`exact h_submission` failed due to proof state: ' + str(proof_state)
                     steps.append((tactic_header, submit_step))
     
                 d['parse_result']['units'][i_u] |= {
                     'deductive_steps' : steps,
                     'deductive_states' : [[g.serialize()] for s in states for g in s]
                 }
-                logger.info(f'worker({idx}-{i_u}/{len(parsed_units)}): succeeded.')
+                logger.info(f'worker({idx}-{i_p}/{len(parsed_units)}): succeeded.')
             except Exception as e:
-                logger.warning(f'worker({idx}-{i_u}/{len(parsed_units)}): Failed due to {repr(e)}:\n{traceback.format_exc()}')
+                logger.debug(f'worker({idx}-{i_p}/{len(parsed_units)}): Failed, traceback: {[traceback.format_exc()]}')
+                logger.warning(f'worker({idx}-{i_p}/{len(parsed_units)}): Failed due to {repr(e)}')
+                # import pdb; pdb.set_trace()
+                # print()
         
         results[idx] = d
         await save_dst.write(json.dumps(d) + '\n')
@@ -356,9 +439,9 @@ def main(
     async def _async_main():
         async with aiofiles.open(osp.join(save_root, 'deductive.'+now+'.jsonl'), 'w') as f:
             pending_tasks: Set[asyncio.Task] = set()
-            loop = enumerate(data_success)
+            loop = list(enumerate(data_success))
             if reverse:
-                loop = reversed(list(loop))
+                loop = list(reversed(loop))
             for i, d in tqdm(loop):
                 if len(pending_tasks) >= n_concurrency:
                     done_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
