@@ -85,7 +85,7 @@ async def worker(
         # assert len(units) == 1, str(len(units))
         
         results[idx] = {
-            'option_list': option_list,
+            'import_list': import_list,
             'open_scoped_list': open_scoped_list,
             'open_list': open_list,
             'option_list': option_list,

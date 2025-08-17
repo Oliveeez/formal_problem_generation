@@ -23,6 +23,15 @@ python data_parse_cycle0123.py \
     --reverse_order Ture
 ```
 
+## Numina-Lean
+```shell
+ulimit -s unlimited;
+python ./numina-lean.parse.py \
+    --n_concurrency 128 \
+    --save_root /home/ma-user/workspace/formal_problem_generation/formal_problem_generation/data/MiniF2F/Numina-Lean \
+    --reversed True
+```
+
 # SFT
 ```shell
 # xTuner 7B
