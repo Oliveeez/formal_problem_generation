@@ -58,8 +58,8 @@ def factory_nonhygienic_transformer(initial_goal_str: str) -> Callable[[str], st
     x_replacement_stack = []
     inst_replacement_stack = []
     for c in context:
-        var_names, var_type = c.split(' : ', 1)
-        for n in var_names.split(' '):
+        var_names, var_type = c.split(':', 1)
+        for n in var_names.strip().split(' '):
             if '✝' in n:
                 base, num_superscript = n.split('✝')
                 num_digit = ''.join([superscript_to_digit[d] for d in num_superscript])
@@ -261,7 +261,10 @@ async def worker(
                         hypotheses.append(declaration)
                     else:
                         assert '✝' not in declaration, f'declaration: {declaration}'
-                        var_names, var_type = declaration[1:-1].split(':', 1)
+                        try:
+                            var_names, var_type = declaration[1:-1].split(':', 1)
+                        except ValueError:
+                            var_names = declaration[1:-1]
                         # var_names = [n if '✝' not in n else '_' for n in var_names.strip().split(' ')]
                         intros.extend(var_names.strip().split(' '))
                         hypotheses.append('(' + declaration[1:-1] + ')')    # Replace '{v : T}' into '(v : T)
@@ -360,7 +363,7 @@ async def worker(
             except Exception as e:
                 logger.debug(f'worker({idx}-{i_p}/{len(parsed_units)}): Failed, traceback: {[traceback.format_exc()]}')
                 logger.warning(f'worker({idx}-{i_p}/{len(parsed_units)}): Failed due to {repr(e)}')
-                if not isinstance(e, RuntimeError):
+                if isinstance(e, ValueError):
                     import pdb; pdb.set_trace()
                     print()
         
