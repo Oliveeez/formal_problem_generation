@@ -8,7 +8,7 @@ import collections as C
 import itertools as I
 import random
 import pickle
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set, Tuple, Callable
 import asyncio
 import regex as re
 from datetime import datetime
@@ -30,6 +30,74 @@ from common.pantograph.server import Server, PersistentServer, TacticFailure
 def is_deductive(ivc: dict) -> bool:
     return len(ivc['before']) == 1 and len(ivc['after']) == 1 and ivc['before'][0].split('⊢ ')[-1] == ivc['after'][0].split('⊢ ')[-1]
 
+superscript_to_digit = {
+    '⁰': '0',
+    '¹': '1',
+    '²': '2',
+    '³': '3',
+    '⁴': '4',
+    '⁵': '5',
+    '⁶': '6',
+    '⁷': '7',
+    '⁸': '8',
+    '⁹': '9'
+}
+def factory_nonhygienic_transformer(initial_goal_str: str) -> Callable[[str], str]:
+    # Parse context
+    context_str, target = initial_goal_str.split('⊢ ')
+    lines = context_str.splitlines()
+    context = []
+    for l in lines:
+        if not l.startswith(' '):   # Multi-line variable produced by pretty-printer
+            context.append(l)
+        else:
+            context[-1] = context[-1] + '\n' + l
+    
+    # Parse var_names
+    x_number_set = set()
+    x_replacement_stack = []
+    inst_replacement_stack = []
+    for c in context:
+        var_names, var_type = c.split(' : ', 1)
+        for n in var_names.split(' '):
+            if '✝' in n:
+                base, num_superscript = n.split('✝')
+                num_digit = ''.join([superscript_to_digit[d] for d in num_superscript])
+                if base == 'inst':
+                    inst_replacement_stack.append((0 if len(num_digit) == 0 else int(num_digit), n))
+                elif base == 'x':
+                    x_replacement_stack.append((0 if len(num_digit) == 0 else int(num_digit), n))
+                else:
+                    logger.debug(f'Detected normal anonymous variable: ({n} : {var_type})')
+                    continue
+            elif n == 'x':
+                x_number_set.add(0)
+            elif n.startswith('x_'):
+                digit: str = n[2:]
+                if digit.isdigit():
+                    x_number_set.add(int(digit))
+        
+    for i, (num_parsed, n) in enumerate(inst_replacement_stack):
+        if i + num_parsed + 1 != len(inst_replacement_stack):
+            logger.error(f'replacement_stack not sorted {inst_replacement_stack}')
+
+    for i, (num_parsed, n) in enumerate(x_replacement_stack):
+        if i + num_parsed + 1 != len(x_replacement_stack):
+            logger.error(f'replacement_stack not sorted {x_replacement_stack}')
+
+    def closure(s: str):
+        for i, (_, n) in enumerate(inst_replacement_stack): # Assuming `inst` not in var names
+            s = s.replace(n, 'inst' + ('' if i == 0 else f'_'+str(i)))
+        
+        i_x_key = 0
+        for _, n in x_replacement_stack:
+            while i_x_key in x_number_set:
+                i_x_key += 1
+            s = s.replace(n, 'x' + ('' if i_x_key == 0 else f'_'+str(i_x_key)))
+        
+        return s
+                
+    return closure
 
 # ANONYMOUS_PATTERN = re.compile(r'✝([⁰¹²³⁴⁵⁶⁷⁸⁹]+)')
 # superscript_to_digit = {
@@ -156,15 +224,16 @@ async def worker(
                 break
         p_injected = '\n'.join(p_injected[:i]) + '\n\n' + '\n'.join('set_option ' + t.replace('=', ' ') for t in CORE_OPTIONS) + '\n\n' + '\n'.join(p_injected[i:])
 
-        parsed_units = [i_u for i_u, u in enumerate(d['parse_result']['units']) if len(u['invocations'] or []) > 0]
+        parsed_units = [i_u for i_u, u in enumerate(d['parse_result']['units']) if len(u['invocations'] or []) > 0 and 'deductive_steps' not in u.keys()]
         logger.debug(f'worker({idx}): {len(parsed_units)} units to parse')
-
 
         for i_p, i_u in enumerate(parsed_units):
             u = d['parse_result']['units'][i_u]
+            
             try:
                 invocations = u['invocations']
                 assert len(invocations[0]['before']) == 1, 'Initial state contains multiple goals'
+                nonhygienic_transformer = factory_nonhygienic_transformer(invocations[0]['before'][0])
 
                 code_segment = remove_comments(p_injected.encode()[u['i_begin']:u['i_end']].decode())
                 start_pos = None
@@ -173,33 +242,42 @@ async def worker(
                 assert start_pos is not None, '":= by" not found'
                 statement_code, proof_code = code_segment[:start_pos.span(0)[0]], code_segment[start_pos.span(0)[1]:]
 
+                # Preprocess steps
+                for ivc in invocations:
+                    ivc['tactic'] = ivc['tactic'].replace('native_decide', 'decide')
+                proof_code = proof_code.replace('native_decide', 'decide')
+
                 # Parse Context from statement code
                 context, target = parse_variables(statement_code)
                 assert target is not None, f'Target parsing failed: {statement_code}'
                 
                 # Parse intros
-                telescope = []
-                for declaration in context:
+                hypotheses = []
+                intros = []
+                
+                for i_ctx, declaration in enumerate(context):
                     if declaration[0] == '[':
-                        telescope.append((['_'], declaration[1:-1]))    #TODO: Now specifically process `[]` to follow `inst`. During training (propose condition from states), maybe it should be re-considered.
+                        intros.append('_')
+                        hypotheses.append(declaration)
                     else:
                         assert '✝' not in declaration, f'declaration: {declaration}'
                         var_names, var_type = declaration[1:-1].split(':', 1)
                         # var_names = [n if '✝' not in n else '_' for n in var_names.strip().split(' ')]
-                        telescope.append((var_names.strip().split(' '), var_type.strip()))
-                
+                        intros.extend(var_names.strip().split(' '))
+                        hypotheses.append('(' + declaration[1:-1] + ')')    # Replace '{v : T}' into '(v : T)
+
                 # Load statement
-                hypotheses = ('∀ ' + '\n'.join(
-                    '(' + ' '.join(var_names) + ' : ' + var_type + ')' if var_names != ['_'] else f'[{var_type}]' for (var_names, var_type) in telescope
-                ) + '\n, ') if len(context) > 0 else ''
-                formal_statement = hypotheses + target
+                # hypotheses = ('∀ ' + '\n'.join(
+                #     '(' + ' '.join(var_names) + ' : ' + var_type + ')' if var_names != ['_'] else f'[{var_type}]' for (var_names, var_type) in telescope
+                # ) + '\n, ') if len(context) > 0 else ''
+                formal_statement = (('∀ ' + '\n'.join(hypotheses) + '\n, ') if len(hypotheses) > 0 else '') + target
                 assert '⊢' not in formal_statement, '⊢ in formal_statement'
 
                 try:
-                    init_state = await server.load_statement_async(formal_statement, intros=list(I.chain(*[h[0] for h in telescope])), header=load_header)
+                    init_state = await server.load_statement_async(formal_statement, intros=intros, header=load_header)
                 except Exception as e:
-                    raise RuntimeError(telescope, load_header) from e
-                assert all(match_wo_mvar(g_parsed, str(g_now)) for g_parsed, g_now in zip(invocations[0]['before'], init_state.goals)), 'initial state not equivalent w/ parse results'
+                    raise RuntimeError(context, target, load_header) from e
+                assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(invocations[0]['before'], init_state.goals)), 'initial state not equivalent w/ parse results'
                 
                 # Start transforming
                 states: List[List[Goal]] = []
@@ -209,24 +287,23 @@ async def worker(
                 # Deductive steps
                 if is_deductive(invocations[0]):
                     deductive_unit_indices = [0]
-                    idx = 0
 
                     for i, ivc in enumerate(invocations[1:], 1):
-                        if is_deductive(ivc) and match_wo_mvar(ivc['before'][0], invocations[deductive_unit_indices[-1]]['after'][0]):
+                        if is_deductive(ivc) and match_wo_mvar(nonhygienic_transformer(ivc['before'][0]), invocations[deductive_unit_indices[-1]]['after'][0]):
                             deductive_unit_indices.append(i)
                             if len(ivc['after'][0]) == 0:
                                 break
 
-                    for idx in deductive_unit_indices:
-                        ivc = invocations[idx]
+                    for deductive_unit_idx in deductive_unit_indices:
+                        ivc = invocations[deductive_unit_idx]
                         states.append(cur_state.goals[:])
                         try:
                             cur_state = await server.goal_tactic_async(cur_state, 0, ivc['tactic'])
-                            assert all(match_wo_mvar(g_parsed, str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
+                            assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
                             steps.append(('', ivc['tactic']))
                         except:
                             cur_state = await server.goal_tactic_async(cur_state, 0, tactic_header + ivc['tactic'])
-                            assert all(match_wo_mvar(g_parsed, str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
+                            assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
                             ivc
                             steps.append((tactic_header, ivc['tactic']))
                 else:
@@ -283,8 +360,9 @@ async def worker(
             except Exception as e:
                 logger.debug(f'worker({idx}-{i_p}/{len(parsed_units)}): Failed, traceback: {[traceback.format_exc()]}')
                 logger.warning(f'worker({idx}-{i_p}/{len(parsed_units)}): Failed due to {repr(e)}')
-                # import pdb; pdb.set_trace()
-                # print()
+                if not isinstance(e, RuntimeError):
+                    import pdb; pdb.set_trace()
+                    print()
         
         results[idx] = d
         await save_dst.write(json.dumps(d) + '\n')
@@ -299,6 +377,7 @@ async def worker(
 def main(
     n_concurrency: int=64,
     load_from: str='/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/data/MiniF2F/Numina-Lean/20250815-172942.pkl',
+    resume_from: str='/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/data/MiniF2F/Numina-Lean/deductive.20250818-003916.jsonl',
     save_root: str='/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/data/MiniF2F/Numina-Lean',
     reverse: bool=False,
 ) -> None:
@@ -307,71 +386,127 @@ def main(
     logger.add(sys.stdout, level='INFO')
     logger.add(osp.join(save_root, now+'.log'), level='DEBUG')
     
-    # Load Parse Results
-    with open(load_from, 'rb') as f:
-        invocations_all = pickle.load(f)
-    
-    # Load Data
-    data = pq.read_table('/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/train-00000-of-00001.parquet').to_pandas().to_dict(orient="records")
-    for d in data:
-        if isinstance(d['formal_ground_truth'], str) and len(d['formal_ground_truth']) == 0 or d['ground_truth_type'] != 'complete':
-            d['formal_ground_truth'] = None
-        if isinstance(d['formal_proof'], str) and len(d['formal_proof']) == 0:
-            d['formal_proof'] = None
-    logger.info(str(C.Counter(d['question_type'] for d in data)))
-    logger.info(str(C.Counter(d['source'] for d in data)))
-    logger.info(str(C.Counter(d['problem_type'] for d in data)))
+    if len(resume_from) == 0:
+        # Load Parse Results
+        with open(load_from, 'rb') as f:
+            invocations_all = pickle.load(f)
+        
+        # Load Data
+        data = pq.read_table('/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/train-00000-of-00001.parquet').to_pandas().to_dict(orient="records")
+        for d in data:
+            if isinstance(d['formal_ground_truth'], str) and len(d['formal_ground_truth']) == 0 or d['ground_truth_type'] != 'complete':
+                d['formal_ground_truth'] = None
+            if isinstance(d['formal_proof'], str) and len(d['formal_proof']) == 0:
+                d['formal_proof'] = None
+        logger.info(str(C.Counter(d['question_type'] for d in data)))
+        logger.info(str(C.Counter(d['source'] for d in data)))
+        logger.info(str(C.Counter(d['problem_type'] for d in data)))
 
-    # Data to process
-    datapoints = []
-    for d in data:
-        if d['formal_ground_truth'] is not None:
-            datapoints.append({
-                k : v for (k, v) in d.items() if k != 'formal_ground_truth' and k != 'formal_proof'
-            } | {'formal_code' : d['formal_ground_truth']})
-        if d['formal_proof'] is not None:
-            datapoints.append({
-                k : v for (k, v) in d.items() if k != 'formal_ground_truth' and k != 'formal_proof'
-            } | {'formal_code' : d['formal_proof']})
-    logger.info(f'{len(datapoints)}/{len(data)} to process in total.')
-    
-    import_cnt = C.Counter()
-    open_cnt = C.Counter()
-    open_scoped_cnt = C.Counter()
-    option_cnt = C.Counter()
+        # Data to process
+        datapoints = []
+        for d in data:
+            if d['formal_ground_truth'] is not None:
+                datapoints.append({
+                    k : v for (k, v) in d.items() if k != 'formal_ground_truth' and k != 'formal_proof'
+                } | {'formal_code' : d['formal_ground_truth']})
+            if d['formal_proof'] is not None:
+                datapoints.append({
+                    k : v for (k, v) in d.items() if k != 'formal_ground_truth' and k != 'formal_proof'
+                } | {'formal_code' : d['formal_proof']})
+        logger.info(f'{len(datapoints)}/{len(data)} to process in total.')
+        
+        import_cnt = C.Counter()
+        open_cnt = C.Counter()
+        open_scoped_cnt = C.Counter()
+        option_cnt = C.Counter()
 
-    ood_lines = C.Counter()
-    parsed_datapoints = []
-    failed_datapoints = []
+        ood_lines = C.Counter()
+        parsed_datapoints = []
+        failed_datapoints = []
 
-    for d in datapoints:
-        p_raw = d['formal_code']
-        try:
-            p = remove_comments(p_raw).strip().replace('\nlemma ', '\ntheorem ').replace('\nexample ', '\ntheorem thm_example')
-            start_pos = p.find('theorem')
-            assert start_pos != -1
-            intro, stmt = p[:start_pos], p[start_pos:]
-            for l in intro.splitlines():
-                if len(l.strip()) == 0:
-                    continue
-                elif l.startswith('import '):
-                    import_cnt[l[len('import '):].strip()] += 1
-                elif l.startswith('open scoped '):
-                    for t in l[len('open scoped '):].strip().split():
-                        open_scoped_cnt[t] += 1
-                elif l.startswith('open '):
-                    for t in l[len('open '):].strip().split():
-                        open_cnt[t] += 1
-                elif l.startswith('set_option '):
-                    option_cnt[l[len('set_option '):].strip()] += 1
-                else:
-                    raise
-            parsed_datapoints.append(d)
-        except:
-            failed_datapoints.append(d)
-            continue
+        for d in datapoints:
+            p_raw = d['formal_code']
+            try:
+                p = remove_comments(p_raw).strip().replace('\nlemma ', '\ntheorem ').replace('\nexample ', '\ntheorem thm_example')
+                start_pos = p.find('theorem')
+                assert start_pos != -1
+                intro, stmt = p[:start_pos], p[start_pos:]
+                for l in intro.splitlines():
+                    if len(l.strip()) == 0:
+                        continue
+                    elif l.startswith('import '):
+                        import_cnt[l[len('import '):].strip()] += 1
+                    elif l.startswith('open scoped '):
+                        for t in l[len('open scoped '):].strip().split():
+                            open_scoped_cnt[t] += 1
+                    elif l.startswith('open '):
+                        for t in l[len('open '):].strip().split():
+                            open_cnt[t] += 1
+                    elif l.startswith('set_option '):
+                        option_cnt[l[len('set_option '):].strip()] += 1
+                    else:
+                        raise
+                parsed_datapoints.append(d)
+            except:
+                failed_datapoints.append(d)
+                continue
 
-    logger.info(f'Context Parsing: {len(parsed_datapoints)} successfully / {len(failed_datapoints)} failed')
+        logger.info(f'Context Parsing: {len(parsed_datapoints)} successfully / {len(failed_datapoints)} failed')
+        
+
+        # Ensure the order of `invocations_all` and `parsed_datapoints` matches
+        assert len(invocations_all) == len(parsed_datapoints)
+
+        data_success = []
+
+        for idx, (ivc_all, d) in enumerate(zip(invocations_all, parsed_datapoints)):
+            try:
+                p_raw = d['formal_code']
+                p = remove_comments(p_raw).strip().replace('\nlemma ', '\ntheorem ').replace('\nexample ', '\ntheorem thm_example')
+                start_pos = p.find('theorem')
+                assert start_pos != -1
+                intro, stmt = p[:start_pos], p[start_pos:]
+
+                import_list = []
+                open_scoped_list = []
+                open_list = []
+                option_list = []
+
+                for l in intro.splitlines():
+                    if len(l.strip()) == 0:
+                        continue
+                    elif l.startswith('import '):
+                        import_list.append(l[len('import '):].strip())
+                    elif l.startswith('open scoped '):
+                        for t in l[len('open scoped '):].strip().split():
+                            open_scoped_list.append(t)
+                    elif l.startswith('open '):
+                        for t in l[len('open '):].strip().split():
+                            open_list.append(t)
+                    elif l.startswith('set_option '):
+                        option_list.append(l[len('set_option '):].strip())
+                    else:
+                        raise
+                
+                assert open_scoped_list == ivc_all['open_scoped_list']
+                assert open_list == ivc_all['open_list']
+                assert option_list == ivc_all['option_list']
+                
+                ivc_all['import_list'] = import_list    # A bug in `numina-lean.parse.py` (0815)
+                
+                data_success.append(
+                    d | {'parse_result': ivc_all, 'index': idx}
+                )
+            except:
+                continue
+
+        logger.info(f'Deductive Transforming {len(data_success)} datapoints')
+
+        finished = [d for d in data_success]
+    else:
+        with open(resume_from, 'r') as f:
+            finished = [json.loads(l) for l in f.readlines()]
+            logger.info(f'Loaded {len(finished)} datapoints from {resume_from}')
     
     available_servers = [
         PersistentServer(
@@ -385,61 +520,10 @@ def main(
         ) for _ in range(n_concurrency)
     ]
 
-    # Ensure the order of `invocations_all` and `parsed_datapoints` matches
-    assert len(invocations_all) == len(parsed_datapoints)
-
-    data_success = []
-
-    for idx, (ivc_all, d) in enumerate(zip(invocations_all, parsed_datapoints)):
-        try:
-            p_raw = d['formal_code']
-            p = remove_comments(p_raw).strip().replace('\nlemma ', '\ntheorem ').replace('\nexample ', '\ntheorem thm_example')
-            start_pos = p.find('theorem')
-            assert start_pos != -1
-            intro, stmt = p[:start_pos], p[start_pos:]
-
-            import_list = []
-            open_scoped_list = []
-            open_list = []
-            option_list = []
-
-            for l in intro.splitlines():
-                if len(l.strip()) == 0:
-                    continue
-                elif l.startswith('import '):
-                    import_list.append(l[len('import '):].strip())
-                elif l.startswith('open scoped '):
-                    for t in l[len('open scoped '):].strip().split():
-                        open_scoped_list.append(t)
-                elif l.startswith('open '):
-                    for t in l[len('open '):].strip().split():
-                        open_list.append(t)
-                elif l.startswith('set_option '):
-                    option_list.append(l[len('set_option '):].strip())
-                else:
-                    raise
-            
-            assert open_scoped_list == ivc_all['open_scoped_list']
-            assert open_list == ivc_all['open_list']
-            assert option_list == ivc_all['option_list']
-            
-            ivc_all['import_list'] = import_list    # A bug in `numina-lean.parse.py` (0815)
-            
-            data_success.append(
-                d | {'parse_result': ivc_all, 'index': idx}
-            )
-        except:
-            continue
-
-    logger.info(f'Deductive Transforming {len(data_success)} datapoints')
-
-    finished = [None for _ in range(len(data_success))]
-    working_root = osp.join(save_root, 'lean')
-    os.makedirs(working_root, exist_ok=True)
     async def _async_main():
         async with aiofiles.open(osp.join(save_root, 'deductive.'+now+'.jsonl'), 'w') as f:
             pending_tasks: Set[asyncio.Task] = set()
-            loop = list(enumerate(data_success))
+            loop = list(enumerate(finished))
             if reverse:
                 loop = list(reversed(loop))
             for i, d in tqdm(loop):
