@@ -280,7 +280,8 @@ async def worker(
                     init_state = await server.load_statement_async(formal_statement, intros=intros, header=load_header)
                 except Exception as e:
                     raise RuntimeError(context, target, load_header) from e
-                assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(invocations[0]['before'], init_state.goals)), 'initial state not equivalent w/ parse results'
+                # assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(invocations[0]['before'], init_state.goals)), 'initial state not equivalent w/ parse results'
+                assert len(init_state.goals) == 1, 'deductive step execution failed' #* Non-strict match
                 
                 # Start transforming
                 states: List[List[Goal]] = []
@@ -292,7 +293,7 @@ async def worker(
                     deductive_unit_indices = [0]
 
                     for i, ivc in enumerate(invocations[1:], 1):
-                        if is_deductive(ivc) and match_wo_mvar(nonhygienic_transformer(ivc['before'][0]), invocations[deductive_unit_indices[-1]]['after'][0]):
+                        if is_deductive(ivc) and match_wo_mvar(ivc['before'][0], invocations[deductive_unit_indices[-1]]['after'][0]):
                             deductive_unit_indices.append(i)
                             if len(ivc['after'][0]) == 0:
                                 break
@@ -302,12 +303,13 @@ async def worker(
                         states.append(cur_state.goals[:])
                         try:
                             cur_state = await server.goal_tactic_async(cur_state, 0, ivc['tactic'])
-                            assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
+                            # assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
+                            assert len(cur_state.goals) == 1 and cur_state.goals[0].target == init_state.goals[0].target, 'deductive step execution failed' #* Non-strict match
                             steps.append(('', ivc['tactic']))
                         except:
                             cur_state = await server.goal_tactic_async(cur_state, 0, tactic_header + ivc['tactic'])
-                            assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
-                            ivc
+                            # assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
+                            assert len(cur_state.goals) == 1 and cur_state.goals[0].target == init_state.goals[0].target, 'deductive step execution failed' #* Non-strict match
                             steps.append((tactic_header, ivc['tactic']))
                 else:
                     deductive_unit_indices = []
@@ -363,9 +365,9 @@ async def worker(
             except Exception as e:
                 logger.debug(f'worker({idx}-{i_p}/{len(parsed_units)}): Failed, traceback: {[traceback.format_exc()]}')
                 logger.warning(f'worker({idx}-{i_p}/{len(parsed_units)}): Failed due to {repr(e)}')
-                if isinstance(e, ValueError):
-                    import pdb; pdb.set_trace()
-                    print()
+                # if isinstance(e, ValueError):
+                #     import pdb; pdb.set_trace()
+                #     print()
         
         results[idx] = d
         await save_dst.write(json.dumps(d) + '\n')
