@@ -41,6 +41,18 @@ NPROC_PER_NODE=8 xtuner train ./train_recipes/${SFT_TASK_NAME}.py --deepspeed de
 xtuner convert pth_to_hf ./train_recipes/${SFT_TASK_NAME}.py ./work_dirs/${SFT_TASK_NAME}/epoch_1.pth /cache/ckpts/${SFT_TASK_NAME}/;
 find ./work_dirs/${SFT_TASK_NAME} | grep state | xargs rm
 
+export SFT_TASK_NAME=Goedel-Prover-V2-8B.Numina-Lean.deductive_prover
+echo $SFT_TASK_NAME
+NPROC_PER_NODE=8 xtuner train ./train_recipes/${SFT_TASK_NAME}.py --deepspeed deepspeed_zero2;
+xtuner convert pth_to_hf ./train_recipes/${SFT_TASK_NAME}.py ./work_dirs/${SFT_TASK_NAME}/epoch_1.pth /cache/ckpts/${SFT_TASK_NAME}/;
+find ./work_dirs/${SFT_TASK_NAME} | grep state | xargs rm
+
+export SFT_TASK_NAME=DeepSeek-Prover-V2-7B.Numina-Lean.deductive_prover
+echo $SFT_TASK_NAME
+NPROC_PER_NODE=8 xtuner train ./train_recipes/${SFT_TASK_NAME}.py --deepspeed deepspeed_zero2;
+xtuner convert pth_to_hf ./train_recipes/${SFT_TASK_NAME}.py ./work_dirs/${SFT_TASK_NAME}/epoch_1.pth /cache/ckpts/${SFT_TASK_NAME}/;
+find ./work_dirs/${SFT_TASK_NAME} | grep state | xargs rm
+
 # Llama-Factory 32B
 accelerate launch \
 --config_file /home/ma-user/workspace/formal_problem_generation/formal_problem_generation/train_recipes/fsdp.yaml \

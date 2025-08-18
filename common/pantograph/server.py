@@ -546,7 +546,7 @@ def record_server_error(func):
     return wrapper
 
 class PersistentServer:
-    def __init__(self, max_count: int=1024, is_state_based: bool=True, tag: str='', _sync_init: bool=True, *args, **kwargs):
+    def __init__(self, max_count: int=64, is_state_based: bool=True, tag: str='', _sync_init: bool=True, *args, **kwargs):
         self.max_count = max_count
         self.is_state_based = is_state_based
             # if is_state_based, load statements inside `self.init_filtering_state`, then can apply tactics in multiple instances. But require statement to declare all variables explicitly and no `[]`, `{}` is allowed
@@ -577,6 +577,7 @@ class PersistentServer:
 
     @record_server_error
     async def load_statement_async(self, statement: str, intros: List[str]=[], header: str='') -> GoalState:
+        self.count += 1
         await self.check_restart_async()
         assert self.is_state_based, f'PersistentServer({self.tag}): load_statement_async() must be used w/ state-based.'
 
