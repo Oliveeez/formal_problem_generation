@@ -1,6 +1,4 @@
-# 1) Parse tactic invocations; 2) According to parsed invocations, transform proofs into deductive-style.
-# Remaining bug: some invocations wrongly format tactics, e.g. alignment of `by` and sub-tactics; the symbol `;`
-# Use `numina-lean.deductive_transform-decompose.py` for further update
+# Should be used after `numina-lean.parse+deductive_transform.py`
 import sys
 import os
 import os.path as osp
@@ -26,15 +24,73 @@ from loguru import logger
 from tqdm import tqdm
 
 from common.constants import OPEN_HEADER, CORE_OPTIONS, MVAR_PATTERN
-from common.utils import remove_comments, normalize_spaces, remove_spaces, normalize_draft, remove_min_whitespace, chunk_list
-from common.pantograph.dataclasses import TacticInvocation, Goal
-from common.pantograph.server import Server, PersistentServer, TacticFailure
+from common.utils import remove_comments, normalize_spaces, remove_spaces, normalize_draft, remove_min_whitespace, chunk_list, replace_sorry, replace_calc, remove_multiline_comments
+from common.pantograph.dataclasses import TacticInvocation, Goal, GoalState
+from common.pantograph.server import Server, PersistentServer, TacticFailure, ServerError
 
 
 N_CONCURRENCY_PER_WORKER = 8
 
-def is_deductive(ivc: dict) -> bool:
-    return len(ivc['before']) == 1 and len(ivc['after']) == 1 and ivc['before'][0].split('⊢ ')[-1] == ivc['after'][0].split('⊢ ')[-1]
+def count_indent(s: str) -> int:
+    count = 0
+    for char in s:
+        if char == ' ':
+            count += 1
+        else:
+            break
+    return count
+
+def proof_decompose(formal_proof: str) -> list[str]:
+    '''Decompose a formal solution draft into steps'''
+    # Count the minimal indents of all tactics
+    min_indents = float('inf')
+    pure_proof_lines = replace_sorry(replace_calc(remove_comments(formal_proof))).split('\n')
+    for l in pure_proof_lines:
+        if l.strip() != '':
+            min_indents = min(min_indents, count_indent(l))
+
+    # Reset the minimal indents to zero
+    levels = []
+    raw_lines = []  # (n_indents, line)
+    for l in replace_sorry(replace_calc(remove_multiline_comments(formal_proof))).rstrip().split('\n'):
+        n_indent = count_indent(l)
+        if n_indent < min_indents:
+            assert len(remove_comments(l).strip()) == 0
+        
+        if len(remove_comments(l).strip()) == 0:
+            level = float('inf')   # Comment
+        else:
+            level = n_indent - min(n_indent, min_indents)   # Tactic
+        raw_lines.append(l[min(n_indent, min_indents):])
+        levels.append(level)
+    
+    # print('\n'.join(raw_lines))
+    is_first = True
+    parse_result = []
+    cur_block = []
+    for (level, line) in zip(levels, raw_lines):
+        # print(line)
+        if len(line.strip()) == 0:
+            continue
+        if level != 0:
+            cur_block.append(line)
+        else:   # Root-level tactic
+            if is_first:    # First tactic block: neglect and add
+                is_first = False
+                cur_block.append(line)
+            else:   # Other tactic block: end and new
+                parse_result.append('\n'.join(cur_block))
+                # print('\n<begin>\n' + parse_result[-1], end='\n<end>\n')
+                cur_block = [line]
+    
+    if len(cur_block) > 0:
+        parse_result.append('\n'.join(cur_block))
+        # print('\n<begin>\n' + parse_result[-1], end='\n<end>\n')
+    
+    return parse_result
+
+def is_deductive(state_before: List[Goal], state_after: List[Goal]) -> bool:
+    return len(state_before) == 1 and len(state_after) == 1 and state_before[0].target == state_after[0].target
 
 superscript_to_digit = {
     '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
@@ -243,44 +299,32 @@ async def async_worker(
     datapoint: Dict,
     base_cnt: int,
     idx: int,
-    available_parsers: List[PersistentServer],
     available_servers: List[PersistentServer],
     results: List,
     working_root: str,
 ) -> None:
-    parser = available_parsers.pop()
-    parser.tag = str(idx)
     server = available_servers.pop()
     server.tag = str(idx)
     try:
+        assert 'exception' not in datapoint.keys() and 'traceback' not in datapoint.keys()
+        
         # I. Parse tactic invocation
         p_raw = datapoint['formal_code']
-        p = remove_comments(p_raw).strip().replace('\nlemma ', '\ntheorem ').replace('\nexample ', '\ntheorem thm_example')
-        start_pos = p.find('theorem')
-        assert start_pos != -1, 'Start pos not found'
-        intro, stmt = p[:start_pos], p[start_pos:]
+
+        import_list = datapoint['parse_result']['import_list']
+        open_scoped_list = datapoint['parse_result']['open_scoped_list']
+        open_list = datapoint['parse_result']['open_list']
+        option_list = datapoint['parse_result']['option_list']
+        units = datapoint['parse_result']['units']
         
-        import_list = []
-        open_scoped_list = []
-        open_list = []
-        option_list = []
+        all_parsed_units = [i_u for i_u, u in enumerate(units) if len(u['invocations'] or []) > 0]
+        remaining_units = [i_u for i_u in all_parsed_units if 'deductive_steps' not in units[i_u].keys()]
+        logger.debug(f'async_worker({base_cnt+idx}): {len(remaining_units)}/{len(all_parsed_units)} units to transform')
+        
+        if len(remaining_units) == 0:
+            return
 
-        for l in intro.splitlines():
-            if len(l.strip()) == 0:
-                continue
-            elif l.startswith('import '):
-                import_list.append(l[len('import '):].strip())
-            elif l.startswith('open scoped '):
-                for t in l[len('open scoped '):].strip().split():
-                    open_scoped_list.append(t)
-            elif l.startswith('open '):
-                for t in l[len('open '):].strip().split():
-                    open_list.append(t)
-            elif l.startswith('set_option '):
-                option_list.append(l[len('set_option '):].strip())
-            else:
-                raise ValueError('Unexpected line in intro code: ' + l)
-
+        
         tactic_header = ''
         load_header = ''
         if len(open_scoped_list):
@@ -300,26 +344,9 @@ async def async_worker(
                 break
         p_injected = '\n'.join(p_injected[:i]) + '\n\n' + '\n'.join('set_option ' + t.replace('=', ' ') for t in CORE_OPTIONS) + '\n\n' + '\n'.join(p_injected[i:])
 
-        async with aiofiles.open(osp.join(working_root, str(base_cnt+idx)+'.lean'), 'w') as f:
-            await f.write(p_injected)
-
-        units = await parser.tactic_invocations_async(osp.join(working_root, str(base_cnt+idx)+'.lean'))
-        assert len(units) >= 1 and 'error' not in str([x.messages for x in units]), 'tactic_invocations_async failed: ' + str([x.messages for x in units])
-        
-        datapoint['parse_result'] = {
-            'import_list': import_list,
-            'open_scoped_list': open_scoped_list,
-            'open_list': open_list,
-            'option_list': option_list,
-            'units': [u.serialize() for u in units]
-        }
-
         # II. Deductive transform
-        parsed_units = [i_u for i_u, u in enumerate(datapoint['parse_result']['units']) if len(u['invocations'] or []) > 0 and 'deductive_steps' not in u.keys()]
-        logger.debug(f'async_worker({base_cnt+idx}): {len(parsed_units)} units to transform')
-
-        for i_p, i_u in enumerate(parsed_units):
-            u = datapoint['parse_result']['units'][i_u]
+        for i_p, i_u in enumerate(remaining_units):
+            u = units[i_u]
             
             try:
                 invocations = u['invocations']
@@ -381,106 +408,80 @@ async def async_worker(
                 # assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(invocations[0]['before'], init_state.goals)), 'initial state not equivalent w/ parse results'
                 
                 # Start transforming
-                states: List[List[Goal]] = []
-                steps: List[Tuple[str, str]] = []
+                raw_steps = proof_decompose(proof_code)
+                
+                states: List[List[Goal]] = [init_state.goals[:]]
+                deductive_steps: List[Tuple[str, str]] = []
                 cur_state = init_state
 
-                next_state = None
-                # Deductive steps
-                if is_deductive(invocations[0]):
-                    deductive_unit_indices = [0]
-
-                    for i, ivc in enumerate(invocations[1:], 1):
-                        if is_deductive(ivc) and match_wo_mvar(ivc['before'][0], invocations[deductive_unit_indices[-1]]['after'][0]):
-                            deductive_unit_indices.append(i)
-                            if len(ivc['after'][0]) == 0:
-                                break
-
-                    for deductive_unit_idx in deductive_unit_indices:
-                        ivc = invocations[deductive_unit_idx]
-                        states.append(cur_state.goals[:])
-                        try:
-                            next_state = await server.goal_tactic_async(cur_state, 0, ivc['tactic'])
-                            # assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
-                            if next_state.is_solved:
-                                assert deductive_unit_idx == deductive_unit_indices[-1], 'next_state.is_solved but deductive_unit_idx != deductive_unit_indices[-1]'
-                                if remove_comments(ivc['tactic']).strip().startswith('exact '): # If the final step is `exact`, do nothing (add to `steps`, update `cur_state` and exit)
-                                    logger.info(f"async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Detected `exact` submission: {[remove_comments(ivc['tactic']).strip()]}")
-                                else:
-                                    logger.info(f"async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Detected non-`exact` submission: {[remove_comments(ivc['tactic']).strip()]}")
-                                    break   # If the final step is not `exact`, 1) do not add to `steps` - leave it for final submission; 2) do not update `cur_state`
-                            else:
-                                assert len(next_state.goals) == 1 and next_state.goals[0].target == init_state.goals[0].target, 'deductive step execution failed' #* Non-strict match
-                            steps.append(('', ivc['tactic']))
-                        except:
-                            next_state = await server.goal_tactic_async(cur_state, 0, tactic_header + ivc['tactic'])
-                            # assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(ivc['after'], cur_state.goals)), 'deductive step execution failed'
-                            if next_state.is_solved:
-                                assert deductive_unit_idx == deductive_unit_indices[-1], 'next_state.is_solved but deductive_unit_idx != deductive_unit_indices[-1]'
-                                if remove_comments(ivc['tactic']).strip().startswith('exact '): # If the final step is `exact`, do nothing (add to `steps`, update `cur_state` and exit)
-                                    logger.info(f"async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Detected `exact` submission: {[remove_comments(ivc['tactic']).strip()]}")
-                                else:
-                                    logger.info(f"async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Detected non-`exact` submission: {[remove_comments(ivc['tactic']).strip()]}")
-                                    break   # If the final step is not `exact`, 1) do not add to `steps` - leave it for final submission; 2) do not update `cur_state`
-                            else:
-                                assert len(next_state.goals) == 1 and next_state.goals[0].target == init_state.goals[0].target, 'deductive step execution failed' #* Non-strict match
-                            steps.append((tactic_header, ivc['tactic']))
-                        cur_state = next_state
-                else:
-                    deductive_unit_indices = []
+                while len(raw_steps) > 0:
+                    # Execute cur_step
+                    cur_step = raw_steps[0]
+                    used_tactic_header = ''
+                    try:
+                        next_state = await server.goal_tactic_async(cur_state, 0, cur_step)
+                    except (TacticFailure, ServerError):
+                        used_tactic_header = tactic_header
+                        next_state = await server.goal_tactic_async(cur_state, 0, tactic_header + cur_step)
+                    
+                    if next_state.is_solved:
+                        if remove_comments(cur_step).strip().startswith('exact '):
+                            # If (solved) and (the final step is `exact`): add cur_step and break
+                            raw_steps = []
+                            cur_state = next_state
+                            states.append(cur_state.goals[:])
+                            deductive_steps.append((used_tactic_header, cur_step))
+                            logger.info(f"async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Detected `exact` submission: {[remove_comments(cur_step).strip()]}")
+                            break
+                        else:
+                            # If (solved) but (the final step is not `exact`): don't add cur_step, don't update state
+                            raw_steps = [cur_step]
+                            logger.info(f"async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Detected non-`exact` submission: {[remove_comments(cur_step).strip()]}")
+                            break   # If the final step is not `exact`, 1) do not add to `steps` - leave it for final submission; 2) do not update `cur_state`
+                    else:
+                        if not is_deductive(cur_state.goals, next_state.goals):
+                            # If (not solved) but (not deductive): don't add cur_step, don't update state
+                            break
+                        else:
+                            # If (not solved) and (is deductive): add cur_step and continue
+                            raw_steps.pop(0)
+                            cur_state = next_state
+                            states.append(cur_state.goals[:])
+                            deductive_steps.append((used_tactic_header, cur_step))
 
                 # Remaining non-deductive steps
-                
-                # 1. Extract remaining steps
-                if not cur_state.is_solved:
-                    deductive_code_wo_space = remove_spaces(remove_comments('\n'.join(s[1] for s in steps)))
-                    assert remove_spaces(proof_code).startswith(deductive_code_wo_space), 'remove_spaces(proof_code).startswith(deductive_code_wo_space) failed'
-
-                    ptr_deductive_code = 0
-                    ptr_proof_line = None
-                    proof_lines = proof_code.splitlines()
-                    for (ptr_proof_line, line) in enumerate(proof_lines):
-                        line_wo_space = remove_spaces(line)
-                        if deductive_code_wo_space[ptr_deductive_code:].startswith(line_wo_space):
-                            ptr_deductive_code += len(line_wo_space)
-                        else:
-                            break
-
-                    if ptr_deductive_code != len(deductive_code_wo_space):
-                        logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): ptr_deductive_code != len(deductive_code_wo_space), cur_line: {line}')
-
-                    # 2. Execute remaining steps
+                if len(raw_steps) > 0:
                     proof_state = cur_state
 
                     submission_name = generate_submission_name([v.name for v in cur_state.goals[0].variables if v.name is not None])
-                    have_step = f'have {submission_name}: {target} := by {{\n' + '\n'.join(proof_lines[ptr_proof_line:]) + '\n}'
+                    have_step = f'have {submission_name}: {target} := by {{\n' + '\n'.join(raw_steps) + '\n}'
                     states.append(proof_state.goals[:])
                     try:
                         proof_state = await server.goal_tactic_async(proof_state, 0, have_step)
                         assert (len(proof_state.goals) == 1 and proof_state.goals[0].target == cur_state.goals[0].target), f'`have {submission_name}` failed due to proof state: ' + str(proof_state)
-                        steps.append(('', have_step))
+                        deductive_steps.append(('', have_step))
                     except:
                         proof_state = await server.goal_tactic_async(proof_state, 0, tactic_header + have_step)
                         assert (len(proof_state.goals) == 1 and proof_state.goals[0].target == cur_state.goals[0].target), f'`have {submission_name}` failed due to proof state: ' + str(proof_state)
-                        steps.append((tactic_header, have_step))
+                        deductive_steps.append((tactic_header, have_step))
 
                     states.append(proof_state.goals[:])
                     submit_step = f'exact {submission_name}'
                     try:
                         proof_state = await server.goal_tactic_async(proof_state, 0, submit_step)
                         assert proof_state.is_solved, f'`exact {submission_name}` failed due to proof state: ' + str(proof_state)
-                        steps.append(('', submit_step))
+                        deductive_steps.append(('', submit_step))
                     except:
                         proof_state = await server.goal_tactic_async(proof_state, 0, tactic_header + submit_step)
                         assert proof_state.is_solved, f'`exact {submission_name}` failed due to proof state: ' + str(proof_state)
-                        steps.append((tactic_header, submit_step))
+                        deductive_steps.append((tactic_header, submit_step))
 
                 # Validate whole proof
                 whole_proof = ''
-                for t, s in steps:
+                for t, s in deductive_steps:
                     if len(t) > 0:
                         whole_proof += t
-                    whole_proof += remove_min_whitespace(s) + '\n\n'
+                    whole_proof += s + '\n\n'
                 whole_proof = whole_proof.strip()
                 
                 try:
@@ -488,18 +489,18 @@ async def async_worker(
                     assert final_state.is_solved, 'final_state.is_solved Failed'
                 except Exception as e:
                     whole_proof = None
-                    logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Whole-proof validation failed, traceback: {[traceback.format_exc()]}')
-                    logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Whole-proof validation failed due to {repr(e)}')
+                    logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Whole-proof validation failed, traceback: {[traceback.format_exc()]}')
+                    logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Whole-proof validation failed due to {repr(e)}')
                 
-                datapoint['parse_result']['units'][i_u] |= {
-                    'deductive_steps' : steps,
+                units[i_u] |= {
+                    'deductive_steps' : deductive_steps,
                     'deductive_states' : [[g.serialize()] for s in states for g in s],
                     'formal_statement' : formal_statement,
                     'intros' : intros,
                     'load_header' : load_header,
                     'whole_proof' : whole_proof
                 }
-                logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): succeeded.')
+                logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): succeeded.')
             except Exception as e:
                 if 'unknown identifier' in str(e) or 'unknown constant' in str(e):
                     pass
@@ -508,32 +509,26 @@ async def async_worker(
                 elif 'expected end of input' in str(e) or "expected '{' or indented tactic sequence" in str(e):
                     pass
                 else:
-                    logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Failed: {traceback.format_exc()}')
+                    logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Failed: {traceback.format_exc()}')
                     # import pdb; pdb.set_trace()
-                logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Failed, traceback: {[traceback.format_exc()]}')
+                logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Failed, traceback: {[traceback.format_exc()]}')
         
         logger.debug(f'async_worker({base_cnt+idx}): finished.')
     except Exception as e:
-        logger.debug(f'async_worker({base_cnt+idx}): Failed, traceback: {[traceback.format_exc()]}')
+        logger.error(f'async_worker({base_cnt+idx}): Failed, traceback: {[traceback.format_exc()]}')
         # import pdb; pdb.set_trace()
-        datapoint |= {
-            'exception': repr(e),
-            'traceback': traceback.format_exc()
-        }
     finally:
         results[idx] = datapoint
-        parser.tag = ''
-        available_parsers.insert(0, parser)
         server.tag = ''
         available_servers.insert(0, server)
 
 def worker(args: Tuple) -> int:
     working_root, base_cnt = args
     
-    if not osp.exists(osp.join(working_root, f'raw_chunk_{base_cnt}.pkl')):
+    if not osp.exists(osp.join(working_root, f'done_chunk_{base_cnt}.pkl')):
         logger.opt(colors=True).info(f'<green>worker({base_cnt}): raw pkl does not exist, exiting....</green>')
         return
-    if osp.exists(osp.join(working_root, f'done_chunk_{base_cnt}.pkl')):
+    if osp.exists(osp.join(working_root, f'done_v2_chunk_{base_cnt}.pkl')):
         logger.opt(colors=True).info(f'<green>worker({base_cnt}): done pkl already exists, exiting....</green>')
         return
 
@@ -542,18 +537,6 @@ def worker(args: Tuple) -> int:
     
     finished_list = [None for _ in range(len(data_to_process))]
 
-    available_parsers = [
-        PersistentServer(
-            max_count=2,
-            is_state_based=False,
-            tag='',
-            _sync_init=False,
-            imports=["Mathlib", "Aesop"],
-            project_path='/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/data/MiniF2F',
-            core_options=CORE_OPTIONS,
-            timeout=300,
-        ) for _ in range(N_CONCURRENCY_PER_WORKER)
-    ]
     available_servers = [
         PersistentServer(
             max_count=64,
@@ -566,11 +549,15 @@ def worker(args: Tuple) -> int:
             timeout=300,
         ) for _ in range(N_CONCURRENCY_PER_WORKER)
     ]
-    logger.info(f'worker({base_cnt}): Initialized, processing {len(data_to_process)} samples.')
+
+    tasks = [
+        (i, d) for (i, d) in enumerate(data_to_process) if 'parse_result' in d.keys()
+    ]
+    logger.info(f'worker({base_cnt}): Initialized, loaded {len(data_to_process)} samples, processing {len(tasks)} invocation-parsed samples.')
 
     async def _async_main():
         pending_tasks = set()
-        for i, d in enumerate(data_to_process):
+        for i, d in tasks:
             if len(pending_tasks) >= N_CONCURRENCY_PER_WORKER:
                 done_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in done_tasks:
@@ -585,7 +572,6 @@ def worker(args: Tuple) -> int:
                         datapoint=d,
                         base_cnt=base_cnt,
                         idx=i,
-                        available_parsers=available_parsers,
                         available_servers=available_servers,
                         results=finished_list,
                         working_root=osp.join(working_root, 'lean'),
@@ -602,31 +588,20 @@ def worker(args: Tuple) -> int:
     except Exception as e:
         logger.error(f"worker({base_cnt}): Failed due to Exception {e}\n{traceback.format_exc()}")
     
-    with open(osp.join(working_root, f'done_chunk_{base_cnt}.pkl'), 'wb') as f:
+    with open(osp.join(working_root, f'done_v2_chunk_{base_cnt}.pkl'), 'wb') as f:
         pickle.dump(finished_list, f, protocol=pickle.HIGHEST_PROTOCOL)
     logger.info(f'worker({base_cnt}): Exiting.')
     return base_cnt
 
-def load_and_split(working_root: str, datapoints: list, chunksize: int, reverse_order: bool):
-    chunks = list(chunk_list(datapoints, chunksize))
+def load_and_split(working_root: str, reverse_order: bool):
     all_splits = set(
             [
-                int(n[len('raw_chunk_'):-len('.pkl')]) for n in os.listdir(working_root) if n.startswith('raw_chunk_') and n.endswith('.pkl')
+                int(n[len('done_chunk_'):-len('.pkl')]) for n in os.listdir(working_root) if n.startswith('done_chunk_') and n.endswith('.pkl')
             ]
         )
-    if len(all_splits) == 0:
-        all_splits = []
-        for base_cnt, chunk in chunks:
-            with open(osp.join(working_root, f'raw_chunk_{base_cnt}.pkl'), 'wb') as f:
-                pickle.dump(chunk, f, pickle.HIGHEST_PROTOCOL)
-                all_splits.append(base_cnt)
-        all_splits = set(all_splits)
-    elif len(all_splits) != len(chunks):
-        logger.warning(f'len(all_splits) != 0 and len(all_splits) != len(chunks): {len(all_splits)} - {len(chunks)}')
-    
     done_splits = set(
             [
-                int(n[len('done_chunk_'):-len('.pkl')]) for n in os.listdir(working_root) if n.startswith('done_chunk_') and n.endswith('.pkl')
+                int(n[len('done_v2_chunk_'):-len('.pkl')]) for n in os.listdir(working_root) if n.startswith('done_v2_chunk_') and n.endswith('.pkl')
             ]
         )
     assert done_splits.issubset(all_splits)
@@ -640,7 +615,6 @@ def main(
     working_root: str='/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/data/MiniF2F/Numina-Lean',
     use_mp: bool=True,
     n_concurrency: int=8,
-    chunksize: int=1024,
     reverse_order: bool=False,
 ) -> None:
     os.makedirs(osp.join(working_root, 'lean'), exist_ok=True)
@@ -649,32 +623,7 @@ def main(
     logger.add(sys.stdout, level='INFO')
     logger.add(osp.join(working_root, now+'.log'), level='DEBUG')
     
-    # Load Data
-    data = pq.read_table('/home/ma-user/workspace/formal_problem_generation/data/Numina-Lean/train-00000-of-00001.parquet').to_pandas().to_dict(orient="records")
-    for d in data:
-        if isinstance(d['formal_ground_truth'], str) and len(d['formal_ground_truth']) == 0 or d['ground_truth_type'] != 'complete':
-            d['formal_ground_truth'] = None
-        if isinstance(d['formal_proof'], str) and len(d['formal_proof']) == 0:
-            d['formal_proof'] = None
-    logger.info(str(C.Counter(d['question_type'] for d in data)))
-    logger.info(str(C.Counter(d['source'] for d in data)))
-    logger.info(str(C.Counter(d['problem_type'] for d in data)))
-
-    # Data to process
-    datapoints = []
-    for d in data:
-        if d['formal_ground_truth'] is not None:
-            datapoints.append({
-                k : v for (k, v) in d.items() if k != 'formal_ground_truth' and k != 'formal_proof'
-            } | {'formal_code' : d['formal_ground_truth']})
-        if d['formal_proof'] is not None:
-            datapoints.append({
-                k : v for (k, v) in d.items() if k != 'formal_ground_truth' and k != 'formal_proof'
-            } | {'formal_code' : d['formal_proof']})
-    logger.info(f'{len(datapoints)}/{len(data)} to process in total.')
-
-    splits = load_and_split(working_root, datapoints, chunksize, reverse_order)
-
+    splits = load_and_split(working_root, reverse_order)
     try:
         if use_mp:
             futures = []
