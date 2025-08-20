@@ -620,7 +620,7 @@ def load_and_split(working_root: str, datapoints: list, chunksize: int, reverse_
                 all_splits.append(base_cnt)
         all_splits = set(all_splits)
     elif len(all_splits) != len(chunks):
-        raise RuntimeError('len(all_splits) != 0 and len(all_splits) != len(chunks)')
+        logger.warning(f'len(all_splits) != 0 and len(all_splits) != len(chunks): {len(all_splits)} - {len(chunks)}')
     
     done_splits = set(
             [

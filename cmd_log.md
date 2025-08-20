@@ -21,6 +21,20 @@ python data_parse_cycle0123.py \
     --reverse_order True \
     --num_processes 8 \
     --reverse_order Ture
+
+ulimit -s unlimited; python ./numina-lean.parse+deductive_transform.py \
+    --working_root /home/ma-user/workspace/formal_problem_generation/data/Numina-Lean/deductive_transformation \
+    --use_mp True \
+    --n_concurrency 8 \
+    --chunksize 1024 \
+    --reverse_order False
+
+ulimit -s unlimited; python ./numina-lean.parse+deductive_transform.py \
+    --working_root /home/ma-user/workspace/formal_problem_generation/data/Numina-Lean/deductive_transformation \
+    --use_mp True \
+    --n_concurrency 8 \
+    --chunksize 1024 \
+    --reverse_order True
 ```
 
 ## Numina-Lean
