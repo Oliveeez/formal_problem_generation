@@ -601,6 +601,7 @@ class PersistentServer:
 
     @record_server_error
     async def load_example_async(self, code: str) -> GoalState:
+        self.count += 1
         await self.check_restart_async()
         assert not self.is_state_based, f'PersistentServer({self.tag}): load_example_async() must be used w/o/ state-based.'
 
@@ -614,6 +615,7 @@ class PersistentServer:
 
     @record_server_error
     async def load_code_async(self, code: str) -> List[CompilationUnit]:
+        self.count += 1
         await self.check_restart_async()
         assert not self.is_state_based, f'PersistentServer({self.tag}): load_code_async() must be used w/o/ state-based.'
 
@@ -623,6 +625,7 @@ class PersistentServer:
 
     @record_server_error
     async def tactic_invocations_async(self, code: str) -> List[CompilationUnit]:
+        self.count += 1
         await self.check_restart_async()
         assert not self.is_state_based, f'PersistentServer({self.tag}): tactic_invocations_async() must be used w/o/ state-based.'
 
@@ -632,6 +635,7 @@ class PersistentServer:
 
     @record_server_error
     async def parse_proof_async(self, code: str) -> List[CompilationUnit]:
+        self.count += 1
         await self.check_restart_async()
         assert not self.is_state_based, f'PersistentServer({self.tag}): parse_proof_async() must be used w/o/ state-based.'
 
@@ -652,7 +656,8 @@ class PersistentServer:
         return await self.server.goal_print_async(*args, **kwargs)
 
     @record_server_error
-    async def load_sorry_async(self, code: str) -> GoalState :
+    async def load_sorry_async(self, code: str) -> List[CompilationUnit]:
+        self.count += 1
         await self.check_restart_async()
         assert not self.is_state_based, f'PersistentServer({self.tag}): load_example_async() must be used w/o/ state-based.'
 

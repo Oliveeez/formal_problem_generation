@@ -25,7 +25,7 @@ from tqdm import tqdm
 
 from common.constants import OPEN_HEADER, CORE_OPTIONS, MVAR_PATTERN
 from common.utils import remove_comments, normalize_spaces, remove_spaces, normalize_draft, remove_min_whitespace, chunk_list
-from common.pantograph.dataclasses import TacticInvocation, Goal, Severity
+from common.pantograph.dataclasses import TacticInvocation, Goal
 from common.pantograph.server import Server, PersistentServer, TacticFailure
 
 
@@ -444,7 +444,8 @@ async def async_worker(
                         else:
                             break
 
-                    assert ptr_deductive_code == len(deductive_code_wo_space), 'ptr_deductive_code != len(deductive_code_wo_space)'
+                    if ptr_deductive_code != len(deductive_code_wo_space):
+                        logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): ptr_deductive_code != len(deductive_code_wo_space), cur_line: {line}')
 
                     # 2. Execute remaining steps
                     proof_state = cur_state
@@ -496,19 +497,18 @@ async def async_worker(
                     'load_header' : load_header,
                     'whole_proof' : whole_proof
                 }
-                logger.info(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): succeeded.')
+                logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): succeeded.')
             except Exception as e:
-                if 'unknown identifier' in str(e.args[0]) or 'unknown constant' in str(e.args[0]):
+                if 'unknown identifier' in str(e) or 'unknown constant' in str(e):
                     pass
                 elif 'remove_spaces(proof_code).startswith(deductive_code_wo_space) failed' in str(e):
                     pass
-                elif 'expected end of input' in str(e):
+                elif 'expected end of input' in str(e) or "expected '{' or indented tactic sequence" in str(e):
                     pass
                 else:
-                    print(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Failed: {traceback.format_exc()}')
-                    import pdb; pdb.set_trace()
+                    logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Failed: {traceback.format_exc()}')
+                    # import pdb; pdb.set_trace()
                 logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Failed, traceback: {[traceback.format_exc()]}')
-                logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(parsed_units)}): Failed due to {repr(e)}')
         
         logger.debug(f'async_worker({base_cnt+idx}): finished.')
     except Exception as e:
@@ -542,7 +542,7 @@ def worker(args: Tuple) -> int:
 
     available_parsers = [
         PersistentServer(
-            max_count=8,
+            max_count=4,
             is_state_based=False,
             tag='',
             _sync_init=False,
@@ -555,7 +555,7 @@ def worker(args: Tuple) -> int:
     available_servers = [
         PersistentServer(
             max_count=64,
-            is_state_based=False,
+            is_state_based=True,
             tag='',
             _sync_init=False,
             imports=["Mathlib", "Aesop"],
@@ -601,7 +601,7 @@ def worker(args: Tuple) -> int:
         logger.error(f"worker({base_cnt}): Failed due to Exception {e}\n{traceback.format_exc()}")
     
     with open(osp.join(working_root, f'done_chunk_{base_cnt}.pkl'), 'wb') as f:
-        pickle.dump(finished_list, protocol=pickle.HIGHEST_PROTOCOL)
+        pickle.dump(finished_list, f, protocol=pickle.HIGHEST_PROTOCOL)
     logger.info(f'worker({base_cnt}): Exiting.')
     return base_cnt
 
