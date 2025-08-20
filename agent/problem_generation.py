@@ -81,7 +81,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
         server: PersistentServer,
         tag: str='',
         reassemble_trajectory: bool=False,
-    ) -> ProblemGenerationProcess:
+    ) -> bool:
         try:
             # Initialize
             # breakpoint()
@@ -222,8 +222,8 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                     reassembled_trajectory.append((deductive_state.goals[0].variables, available_actions[0]))
                     if chosen_action.is_submitting:
                         assert submission_name in [v.name for v in deductive_state.goals[0].variables], f'submission_name={submission_name}, deductive_state={deductive_state}'
-                        if not set(deductive_state.goals[0].variables).issubset(set(problem_state.goals[0].variables)):
-                            logger.warning(f'analyze_async({tag}): ¬(deductive_state ⊆ forward_state): {deductive_state.goals[0].variables}, {problem_state.goals[0].variables}')
+                        if not set(deductive_state.goals[0].variables).issubset(set(states[-1].goals[0].variables)):
+                            logger.warning(f'analyze_async({tag}): ¬(deductive_state ⊆ states[-1]): {deductive_state.goals[0].variables}, {states[-1].goals[0].variables}')
                         break
                     deductive_state = await server.goal_tactic_async(deductive_state, 0, chosen_action.step)
                     G.remove_node(available_actions[0])
@@ -351,10 +351,15 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                 
                 # Not submitting: deducing or introducing
                 try:
+                    idents = set(cur_step.step.split())
                     if cur_step.is_deducing:
                         # Validate step: 'deducing' should contain no sorries.
-                        new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, TacticDraft('by\n' + cur_step.step + '\nsorry'))
+                        for banned_token in BANNED_TOKENS:
+                            assert banned_token not in idents, f'Banned token "{banned_token}" in step "{cur_step.step}"'
+                        new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)   # Preventing sorry by `TacticDraft('by\n' + cur_step.step + '\nsorry')` may hinder some steps.
                     elif cur_step.is_introducing:
+                        for banned_token in BANNED_TOKENS[1:]:
+                            assert banned_token not in idents, f'Banned token "{banned_token}" in step "{cur_step.step}"'
                         new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
                         for tac in FALSIFY_TACTICS: # TODO: Stricter falsify check? (e.g. using prover model) - Maybe final check?
                             falsify_problem_state = await server.goal_tactic_async(new_problem_state, 0, 'try ' + tac)
