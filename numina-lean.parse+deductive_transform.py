@@ -542,7 +542,7 @@ def worker(args: Tuple) -> int:
 
     available_parsers = [
         PersistentServer(
-            max_count=4,
+            max_count=2,
             is_state_based=False,
             tag='',
             _sync_init=False,
