@@ -28,7 +28,7 @@ use_varlen_attn = True
 # Data
 # Filter: Re-execute using same environment settting w/ eval; filter out tactics with banned tactics; filter out dummy tactics (state_before == state_after)
 data_path = [
-    '/cache/data/train.deductive_prover.header_corrected.jsonl'
+    '/cache/data/deductive_proof_generation.40069.jsonl'
 ]
 prompt_template = PROMPT_TEMPLATE.default
 max_length = 8192
