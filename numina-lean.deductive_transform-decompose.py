@@ -301,7 +301,6 @@ async def async_worker(
     idx: int,
     available_servers: List[PersistentServer],
     results: List,
-    working_root: str,
 ) -> None:
     server = available_servers.pop()
     server.tag = str(idx)
@@ -392,9 +391,34 @@ async def async_worker(
                 try:
                     init_state = await server.load_statement_async(formal_statement, intros=intros, header=load_header)
                 except Exception as e:
-                    raise RuntimeError(e, context, target, load_header)
+                    # Fall-back: parse from initial state
+                    context_str, target = invocations[0]['before'][0].split('⊢ ')
+                    lines = context_str.splitlines()
+                    context = []
+                    for l in lines:
+                        if not l.startswith(' '):   # Multi-line variable produced by pretty-printer
+                            context.append(l)
+                        else:
+                            context[-1] = context[-1] + '\n' + l
+                    
+                    # Parse intros
+                    intros = []
+                    for c in context:
+                        var_names, var_type = c.split(' : ', 1)
+                        var_names = [n if '✝' not in n else '_' for n in var_names.split(' ')]
+                        intros.extend(var_names)
+                    
+                    # Load statement
+                    hypotheses = ('∀ ' + '\n'.join('(' + c + ')' for c in context) + '\n, ') if len(context) > 0 else ''
+                    formal_statement = hypotheses + target
+                    assert '⊢' not in formal_statement
+                    try:
+                        init_state = await server.load_statement_async(formal_statement, intros=intros, header=load_header)
+                    except Exception as e:
+                        raise RuntimeError(e, formal_statement, intros, load_header)
+                    
                 # assert all(match_wo_mvar(nonhygienic_transformer(g_parsed), str(g_now)) for g_parsed, g_now in zip(invocations[0]['before'], init_state.goals)), 'initial state not equivalent w/ parse results'
-                assert len(init_state.goals) == 1, 'deductive step execution failed' #* Non-strict match
+                assert len(init_state.goals) == 1, 'Strange initial state: ' + str(init_state) #* Non-strict match
 
                 # 3. Load statement (after Pantograph v0.3.5)
                 # formal_statement = ('example\n' + '\n'.join(hypotheses) + '\n: ') + target + '\n:= sorry'
@@ -504,10 +528,6 @@ async def async_worker(
             except Exception as e:
                 if 'unknown identifier' in str(e) or 'unknown constant' in str(e):
                     pass
-                elif 'remove_spaces(proof_code).startswith(deductive_code_wo_space) failed' in str(e):
-                    pass
-                elif 'expected end of input' in str(e) or "expected '{' or indented tactic sequence" in str(e):
-                    pass
                 else:
                     logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Failed: {traceback.format_exc()}')
                     # import pdb; pdb.set_trace()
@@ -526,13 +546,13 @@ def worker(args: Tuple) -> int:
     working_root, base_cnt = args
     
     if not osp.exists(osp.join(working_root, f'done_chunk_{base_cnt}.pkl')):
-        logger.opt(colors=True).info(f'<green>worker({base_cnt}): raw pkl does not exist, exiting....</green>')
+        logger.opt(colors=True).info(f'<green>worker({base_cnt}): done pkl does not exist, exiting....</green>')
         return
     if osp.exists(osp.join(working_root, f'done_v2_chunk_{base_cnt}.pkl')):
-        logger.opt(colors=True).info(f'<green>worker({base_cnt}): done pkl already exists, exiting....</green>')
+        logger.opt(colors=True).info(f'<green>worker({base_cnt}): done_v2 pkl already exists, exiting....</green>')
         return
 
-    with open(osp.join(working_root, f'raw_chunk_{base_cnt}.pkl'), 'rb') as f:
+    with open(osp.join(working_root, f'done_chunk_{base_cnt}.pkl'), 'rb') as f:
         data_to_process = pickle.load(f)
     
     finished_list = [None for _ in range(len(data_to_process))]
@@ -574,7 +594,6 @@ def worker(args: Tuple) -> int:
                         idx=i,
                         available_servers=available_servers,
                         results=finished_list,
-                        working_root=osp.join(working_root, 'lean'),
                     )
                 )
             )
