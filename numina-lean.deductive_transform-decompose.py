@@ -479,7 +479,6 @@ async def async_worker(
 
                     submission_name = generate_submission_name([v.name for v in cur_state.goals[0].variables if v.name is not None])
                     have_step = f'have {submission_name}: {target} := by {{\n' + '\n'.join(raw_steps) + '\n}'
-                    states.append(proof_state.goals[:])
                     try:
                         proof_state = await server.goal_tactic_async(proof_state, 0, have_step)
                         assert (len(proof_state.goals) == 1 and proof_state.goals[0].target == cur_state.goals[0].target), f'`have {submission_name}` failed due to proof state: ' + str(proof_state)
@@ -488,8 +487,8 @@ async def async_worker(
                         proof_state = await server.goal_tactic_async(proof_state, 0, tactic_header + have_step)
                         assert (len(proof_state.goals) == 1 and proof_state.goals[0].target == cur_state.goals[0].target), f'`have {submission_name}` failed due to proof state: ' + str(proof_state)
                         deductive_steps.append((tactic_header, have_step))
-
                     states.append(proof_state.goals[:])
+                    
                     submit_step = f'exact {submission_name}'
                     try:
                         proof_state = await server.goal_tactic_async(proof_state, 0, submit_step)
@@ -499,6 +498,7 @@ async def async_worker(
                         proof_state = await server.goal_tactic_async(proof_state, 0, tactic_header + submit_step)
                         assert proof_state.is_solved, f'`exact {submission_name}` failed due to proof state: ' + str(proof_state)
                         deductive_steps.append((tactic_header, submit_step))
+                    states.append(proof_state.goals[:])
 
                 # Validate whole proof
                 whole_proof = ''
