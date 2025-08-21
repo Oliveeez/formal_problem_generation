@@ -49,6 +49,49 @@ digit_to_subscript = {v: k for k, v in subscript_to_digit.items()}
 
 allowed_prefices = ['h', 'h_']
 
+bracket_pairings = {
+    '(' : ')',
+    '[' : ']',
+    '{' : '}',
+    '⦃' : '⦄'
+}
+
+def parse_variables(s : str) -> Tuple[str, str]:
+    base = 0
+    variables = []
+    target = None
+    while base < len(s):
+        if s[base] in ['(', '[', '{', '⦃']:
+            bracket_type = s[base]
+            bracket_pairing = bracket_pairings[bracket_type]
+        
+            stack_cnt = 0
+            start_end_positions = []
+
+            for i, char in enumerate(s[base:]):
+                if char == bracket_type:
+                    if stack_cnt == 0:
+                        start_position = i
+                    stack_cnt += 1
+                elif char == bracket_pairing:
+                    if stack_cnt > 0:
+                        stack_cnt -= 1
+                        if stack_cnt == 0:
+                            end_position = i
+                            start_end_positions.append((start_position, end_position))
+                            break
+            
+            start, end = start_end_positions[0]
+            variables.append(s[base+start:base+end+1])
+            base += i
+        else:
+            if s[base] == ',':
+                target = s[base+1:].strip()
+                break
+            base += 1
+    
+    return variables, target
+
 def generate_submission_name(name_list: List[str]) -> str:
     # Parse names
     numbers_existing = C.defaultdict(list)
@@ -118,7 +161,7 @@ async def async_worker(
         
         all_transformed_units = [i_u for i_u, u in enumerate(units) if 'deductive_steps' in units[i_u].keys()]
         remaining_units = [i_u for i_u in all_transformed_units if 'generation_process' not in units[i_u].keys()]
-        logger.debug(f'async_worker({base_cnt+idx}): {len(remaining_units)}/{len(all_transformed_units)} units to reasseblme')
+        logger.debug(f'async_worker({base_cnt+idx}): {len(remaining_units)}/{len(all_transformed_units)} units to reassemble.')
         if len(remaining_units) == 0:
             return
 
@@ -150,9 +193,16 @@ async def async_worker(
             try:
                 deductive_steps: List[Tuple[str, str]] = u['deductive_steps']
                 deductive_states: List[List[Dict]] = u['deductive_states']
-                if len(deductive_steps) == len(deductive_states):
+                if len(deductive_states[-1]) != 0:  #* Caused by a bug in `numina-lean.deductive_transform-decompose.py` (fixed in `e657161`)
+                    for i in reversed(list(range(1, len(deductive_states)))):
+                        if deductive_states[i] == deductive_states[i-1]:
+                            break
+                    if deductive_states[i] == deductive_states[i-1]:
+                        logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Removing {i}-th state (duplicated)')
+                        deductive_states.pop(i)
                     deductive_states.append([])
-                assert len(deductive_steps) + 1 == len(deductive_states)
+                if len(deductive_steps) + 1 != len(deductive_states):
+                    logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): len(deductive_steps) + 1 != len(deductive_states): {len(deductive_steps)}, {len(deductive_states)}')
                 
                 states: List[GoalState] = []
                 steps: List[ProblemGenerationStep] = []
@@ -161,18 +211,61 @@ async def async_worker(
                 
                 # Execute introducing steps
                 assert len(deductive_states[0]) == 1
+                
                 init_parsed_goal = dacite.from_dict(Goal, deductive_states[0][0])
-                for v in init_parsed_goal.variables:
-                    name = v.name
-                    if '✝' in v.name:
-                        assert v.name.replace('✝', '_') not in str(u['deductive_states'])
-                        name = v.name.replace('✝', '_')
+                var_type_dict = {
+                    v.name : v.t for v in init_parsed_goal.variables
+                }
+                var_value_dict = {
+                    v.name : v.v for v in init_parsed_goal.variables
+                }
+                
+                # Break from formal statement
+                formal_statement = u['formal_statement']
+                variables = []
+                if formal_statement.startswith('∀ '):
+                    context, target = parse_variables(formal_statement[len('∀ '):])
+                    for declaration in context:
+                        if declaration[0] == '[':
+                            try:
+                                var_names, var_type = declaration[1:-1].split(':', 1)
+                            except ValueError:
+                                var_names = '_'
+                                var_type = declaration[1:-1]
+                            for name in var_names.strip().split():
+                                # print(name, var_type)
+                                variables.append((name.strip(), var_type))
+                        else:
+                            assert '✝' not in declaration, f'declaration: {declaration}'
+                            try:
+                                var_names, var_type = declaration[1:-1].split(':', 1)
+                            except ValueError:
+                                var_names = declaration[1:-1]
+                                var_type = None
+                            for name in var_names.strip().split():
+                                if '✝' in name:
+                                    logger.critical(f"async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): '✝' in name: {[formal_statement]}")
+                                    name = '_'
+                                variables.append((name.strip(), var_type or var_type_dict[name.strip()]))
+                else:
+                    target = formal_statement.strip()
+                
+                for (name, var_type) in variables:
+                    # name = v.name
+                    # decl = v.t
+                    # if '✝' in v.name:
+                    #     assert v.name.replace('✝', '_') not in str(u['deductive_states'])
+                    #     name = v.name.replace('✝', '_')
+                    # if decl.startswith('Type u_'):
+                    #     decl = 'Type*'
+                    # elif decl.startswith('Sort u*'):
+                    #     decl = 'Sort*'
                     cur_step = ProblemGenerationStep(   # ProblemGenerationStepCategory.Introduce
-                        step_draft=f'have {name} : {v.t} := sorry' if v.v is None else f'let {v.name} : {v.t} := {v.v}',
+                        step_draft=f'have {name} : {var_type} := sorry', # if var_value_dict[name] is None else f'let {name} : {var_type} := {var_value_dict[name]}'
                         proof=None,
                         new_contexts=[]
                     )
-                    
+                    # TODO: rename_i 到底会不会改变fvarid?
                     try:
                         new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
                     except (TacticFailure, ServerError):
@@ -186,18 +279,19 @@ async def async_worker(
                     
                     cur_step.new_contexts = [
                         v for v in new_problem_state.goals[0].variables if
-                            v.raw_name not in {vv.raw_name for vv in cur_problem_state.goals[0].variables}
-                            # v not in forward_state.goals[0].variables
+                            v.raw_name not in {vv.raw_name for vv in cur_problem_state.goals[0].variables}  # 缺陷: 存在Bug，有时Tactic application会导致无关的fvar被重新assign，且该tactic和原tactic无依赖关系
+                            # v not in cur_problem_state.goals[0].variables   # 缺陷: 可能只是改名了... —— 没事，正好是rename_i的需求！
+                            # (v not in cur_problem_state.goals[0].variables) and (v.raw_name not in {vv.raw_name for vv in cur_problem_state.goals[0].variables})  # 缺陷: 对rename_i不友好
                     ]
                     if len(cur_step.new_contexts) != 1:
-                        logger.critical(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Strange introducing step: {str(cur_step)}')
+                        logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Introducing step potentially leading name change: {str(cur_step)}, {cur_step.new_contexts}')
                     
                     states.append(new_problem_state)
                     steps.append(cur_step)
                     cur_problem_state = new_problem_state
                 
                 if init_parsed_goal.variables != cur_problem_state.goals[0].variables:
-                    logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): init_parsed_goal.variables != cur_problem_state.goals[0].variables: {[str(init_parsed_goal), str(cur_problem_state.goals[0])]}')
+                    logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): init_parsed_goal.variables != cur_problem_state.goals[0].variables: {[str(init_parsed_goal), str(cur_problem_state.goals[0])]}')
                 
                 # Execute deriving steps
                 for ((step_header, step_code), next_parsed_state) in zip(deductive_steps[:-1], deductive_states[1:-1]):
@@ -215,24 +309,22 @@ async def async_worker(
                     for banned_token in BANNED_TOKENS:
                         if banned_token in idents:
                             logger.critical(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Banned token "{banned_token}" in step "{step_code}"')
-                            
+
                     cur_step.new_contexts = [
                         v for v in new_problem_state.goals[0].variables if
                             v.raw_name not in {vv.raw_name for vv in cur_problem_state.goals[0].variables}
-                            # v not in forward_state.goals[0].variables
                     ]
                     if len(cur_step.new_contexts) == 0:
-                        logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Unused step: {str(cur_step)}')
+                        logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Unused step: {str(cur_step)}')
                     
                     states.append(new_problem_state)
                     steps.append(cur_step)
                     cur_problem_state = new_problem_state
                 
                     if next_parsed_goal.variables != cur_problem_state.goals[0].variables:
-                        logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): next_parsed_goal.variables != cur_problem_state.goals[0].variables: {[str(next_parsed_goal), str(cur_problem_state.goals[0])]}')
+                        logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): next_parsed_goal.variables != cur_problem_state.goals[0].variables: {[str(next_parsed_goal), str(cur_problem_state.goals[0])]}')
                 
                 # Execute submitting step
-                assert len(deductive_states[-1]) == 0
                 step_code = remove_comments(deductive_steps[-1][-1]).strip()
                 assert step_code.startswith('exact '), step_code
                 submission_name = step_code[len('exact '):]
@@ -260,10 +352,9 @@ async def async_worker(
                     cur_step.new_contexts = [
                         v for v in new_problem_state.goals[0].variables if
                             v.raw_name not in {vv.raw_name for vv in cur_problem_state.goals[0].variables}
-                            # v not in forward_state.goals[0].variables
                     ]
                     if len(cur_step.new_contexts) == 0:
-                        logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Unused step: {str(cur_step)}')
+                        logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Unused step: {str(cur_step)}')
                     
                     states.append(new_problem_state)
                     steps.append(cur_step)
@@ -298,7 +389,7 @@ async def async_worker(
                     result=result,
                     states=states,
                     server=server,
-                    tag=str(base_cnt+idx),
+                    tag=f'{base_cnt+idx}-{i_p}/{len(remaining_units)}',
                     reassemble_trajectory=True
                 )
                 result.metainfo = json.dumps(result.metainfo | {'time_consumption': time.time() - time_start})
@@ -306,17 +397,14 @@ async def async_worker(
                 u['generation_process'] = result
                 logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): succeeded.')
             except Exception as e:
-                if 'unknown identifier' in str(e) or 'unknown constant' in str(e):
-                    pass
-                else:
-                    logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Failed: {traceback.format_exc()}')
-                    # import pdb; pdb.set_trace()
+                logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Failed: {traceback.format_exc()}')
+                # import ipdb; ipdb.set_trace()
                 logger.debug(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Failed, traceback: {[traceback.format_exc()]}')
         
         logger.debug(f'async_worker({base_cnt+idx}): finished.')
     except Exception as e:
-        logger.error(f'async_worker({base_cnt+idx}): Failed, traceback: {[traceback.format_exc()]}')
-        # import pdb; pdb.set_trace()
+        logger.error(f'async_worker({base_cnt+idx}): Async worker failed, traceback: {[traceback.format_exc()]}')
+        # import ipdb; ipdb.set_trace()
     finally:
         results[idx] = datapoint
         server.tag = ''
@@ -351,7 +439,7 @@ def worker(args: Tuple) -> int:
     ]
 
     tasks = [
-        (i, d) for (i, d) in enumerate(data_to_process) if 'parse_result' in d.keys()
+        (i, d) for (i, d) in enumerate(data_to_process) if d is not None and 'parse_result' in d.keys()
     ]
     logger.info(f'worker({base_cnt}): Initialized, loaded {len(data_to_process)} samples, processing {len(tasks)} invocation-parsed samples.')
 
@@ -418,9 +506,10 @@ def main(
 ) -> None:
     os.makedirs(osp.join(working_root, 'lean'), exist_ok=True)
     now = datetime.now().strftime("%Y%m%d-%H%M%S")
-    logger.remove()
-    logger.add(sys.stdout, level='INFO')
-    logger.add(osp.join(working_root, now+'.log'), level='DEBUG')
+    if use_mp:
+        logger.remove()
+        logger.add(sys.stdout, level='INFO')
+        logger.add(osp.join(working_root, now+'.log'), level='DEBUG')
     
     splits = load_and_split(working_root, reverse_order)
     try:

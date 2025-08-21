@@ -95,6 +95,8 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
             dependency_graph = nx.DiGraph()
             hard_dependencies_global = []
             fvarid_to_istep: Dict[str, int] = dict()
+            # var_to_istep: Dict[Variable, int] = dict()
+            # TODO: 要不要var_to_istep?
 
             # Depednency between proof scripts
             for i_step, cur_step in enumerate(steps[:-1]):
@@ -104,18 +106,18 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                 
                 assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
                 
-                # 2. Analyze state difference
-                for v in cur_step.new_contexts:
-                    # assert v.raw_name not in fvarid_to_istep.keys()
-                    fvarid_to_istep[v.raw_name] = i_step # Maybe override!
-                
+                # 2. Analyze state difference                
                 dependency_graph.add_node(i_step)
                 
                 # 3. (Optional) Validate assumption: forward_state.goals[0].variables is topologically sorted
-                tmp_state = problem_state
-                while len(tmp_state.goals[0].variables) > 0:
-                    tmp_state = await server.goal_tactic_async(tmp_state, 0, f'clear! {tmp_state.goals[0].variables[-1].name}')
-                assert str(tmp_state) == '⊢ False', str(tmp_state)
+                # tmp_state = problem_state
+                # while len(tmp_state.goals[0].variables) > 0:
+                #     for v in tmp_state.goals[0].variables:
+                #         if '✝' in v.name:
+                #             continue
+                #         tmp_state = await server.goal_tactic_async(tmp_state, 0, f'clear! {v.name}')
+                #         break
+                # assert len(tmp_state.goals) == 1 and len(tmp_state.goals[0].variables) == 0 and tmp_state.goals[0].target == 'False', str(tmp_state)
                 
                 # 4. Analyze dependency
                 soft_dependencies = set()    # Set of fVarId. Removing which will corrupt other variables
@@ -184,6 +186,10 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                     # logger.info(f'analyze_async({tag}): Adding dependency: {[vv.name for vv in parsed_steps[fvarid_to_istep[d]].new_contexts]} -> {[vv.name for vv in cur_step.new_contexts]}')
                     dependency_graph.add_edge(fvarid_to_istep[d], i_step)
                 
+                # Update fvar mapping
+                for v in cur_step.new_contexts:
+                    # assert v.raw_name not in fvarid_to_istep.keys()
+                    fvarid_to_istep[v.raw_name] = i_step # Maybe override!
                 # problem_state = new_problem_state
 
             submission_fvar = [v for v in result.trajectory[-1][0] if v.name == submission_name]
@@ -202,14 +208,14 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
             # (Optional) Reassemble trajectories
             if reassemble_trajectory:
                 # Reduce transitive edges; Compute depths
-                reduced_dependency_graph = nx.algorithms.dag.transitive_reduction(dependency_graph)
+                # dependency_graph = nx.algorithms.dag.transitive_reduction(dependency_graph)
                 depth_dict = {n : 0 for n in range(len(steps))}
-                for u in nx.topological_sort(reduced_dependency_graph):
-                    for v in reduced_dependency_graph.successors(u):
+                for u in nx.topological_sort(dependency_graph):
+                    for v in dependency_graph.successors(u):
                         depth_dict[v] = max(depth_dict[v], depth_dict[u]+1)
                 
                 reassembled_trajectory = []
-                G = reduced_dependency_graph.copy()
+                G = dependency_graph.copy()
                 deductive_state = await server.load_statement_async('False')
                 
                 # TODO: Shall we conduct backward-dfs to collect all nodes that `answer` needs?
@@ -218,20 +224,47 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
 
                 while True:
                     available_actions = sorted([n for (n, d) in G.in_degree() if d == 0], key=lambda n : (-depth_dict[n], steps[n].is_introducing))
-                    chosen_action = steps[available_actions[0]]
-                    reassembled_trajectory.append((deductive_state.goals[0].variables, available_actions[0]))
-                    if chosen_action.is_submitting:
-                        assert submission_name in [v.name for v in deductive_state.goals[0].variables], f'submission_name={submission_name}, deductive_state={deductive_state}'
-                        if not set(deductive_state.goals[0].variables).issubset(set(states[-1].goals[0].variables)):
-                            logger.warning(f'analyze_async({tag}): ¬(deductive_state ⊆ states[-1]): {deductive_state.goals[0].variables}, {states[-1].goals[0].variables}')
-                        break
-                    deductive_state = await server.goal_tactic_async(deductive_state, 0, chosen_action.step)
-                    G.remove_node(available_actions[0])
+                    is_success = False
+                    for i, action_id in enumerate(available_actions):   # If fail, fall back to other available actions
+                        try:
+                            chosen_action = steps[action_id]
+                            if chosen_action.is_submitting:
+                                submission_fvar_re = [v for v in deductive_state.goals[0].variables if v.name == submission_name]
+                                assert len(submission_fvar_re) == 1, f'submission_name={submission_name}, deductive_state={deductive_state}'
+                                submission_fvar_re = submission_fvar_re[0]
+                                assert submission_fvar_re.t == submission_fvar.t, f'submission_fvar_re.t != submission_fvar.t: {submission_fvar_re.t} != {submission_fvar.t}'
+                                reassembled_trajectory.append((deductive_state.goals[0].variables, action_id))
+                                if not set(deductive_state.goals[0].variables).issubset(set(states[-1].goals[0].variables)):
+                                    logger.warning(f'analyze_async({tag}): ¬(deductive_state ⊆ states[-1]): {[str(deductive_state.goals[0])], str(states[-1].goals[0])}')
+                                result.metainfo['original_trajectory'] = [([v.serialize() for v in S], i_s) for (S, i_s) in result.trajectory]
+                                result.trajectory = reassembled_trajectory
+                                return True
+                            new_deductive_state = await server.goal_tactic_async(deductive_state, 0, chosen_action.step)
+                            reassembled_trajectory.append((deductive_state.goals[0].variables, action_id))
+                            is_success = True
+                            G.remove_node(action_id)
+                            deductive_state = new_deductive_state
+                        except Exception as e:
+                            logger.debug(f'analyze_async({tag}): [{i}/{len(available_actions)}] available actions failed due to {repr(e)}')
+                    if not is_success:
+                        raise RuntimeError('All available actions failed.')
                 
-                result.metainfo['original_trajectory'] = [([v.serialize() for v in S], i_s) for (S, i_s) in result.trajectory]
-                result.trajectory = reassembled_trajectory
         except Exception as e:
             logger.warning(f'analyze_async({tag}): Failed due to {repr(e)}')
+            logger.debug(f'analyze_async({tag}): Failed traceback {[traceback.format_exc()]}')
+            # # reduced_dependency_graph = nx.algorithms.dag.transitive_reduction(dependency_graph)
+            # import matplotlib.pyplot as plt
+            # plt.figure(figsize=(24, 16))
+            # pos = nx.nx_agraph.graphviz_layout(dependency_graph, prog="dot", args="")
+            # color_map = ['orange' if steps[int(node)].is_submitting else 'cyan' if steps[int(node)].is_deducing else 'green' for node in dependency_graph.nodes]
+            # labels = {n: f'{depth_dict[n]}' + '\n' + '\n'.join(str(v) for v in (steps[n].new_contexts or [steps[n].step])) for n in dependency_graph.nodes}
+            # # labels = {node: '\n'.join(str(v) for v in (steps[int(node)].new_contexts or [steps[int(node)].step])) for node in reduced_dependency_graph.nodes}
+            # # order_dict = {n : i for i, (s, n) in enumerate(reassembled_trajectory)}
+            # # labels = {n: f'{order_dict.get(n, "∞")}, {depth_dict[n]}' + '\n' + '\n'.join(str(v) for v in (steps[n].new_contexts or [steps[n].step])) for n in dependency_graph.nodes}
+            # nx.draw(dependency_graph, pos, with_labels=True, labels=labels, node_size=800, font_size=6, node_color=color_map)
+            # plt.tight_layout()
+            # plt.savefig(f'/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/direct_dependency_graph.pdf')
+            # import ipdb; ipdb.set_trace()
             return False
         
         return True
