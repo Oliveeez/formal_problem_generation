@@ -110,7 +110,34 @@ do
     port=$((port + 1))
 done
 
+for i_experiment in 0 1 2 3 4 5 6 7
+do
+    export ASCEND_RT_VISIBLE_DEVICES=$i_experiment;
+    python -m vllm.entrypoints.openai.api_server \
+        --model /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.problem_generator \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key numina-lean-goedelv2_8b-fpgv2 \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 &
+done
 
+# Agent Run
+ulimit -s unlimited;
+python -m evaluator.fpg_problem_generation \
+    --log_root output/sft_ar_v2/Goedel-Prover-V2-8B.Numina-Lean.problem_generator \
+    --agent_name sft_ar_v2 \
+    --base_url http://0.0.0.0:37210/v1 \
+    --api_key numina-lean-goedelv2_8b-fpgv2 \
+    --model_name /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.problem_generator \
+    --n_servers 8 \
+    --num_generation_attempt 16 \
+    --reassemble_trajectory True \
+    --max_search_trials 640 \
+    --num_max_samples_per_trial 32 \
+    --num_concurrency 96
 
 # Agent Run
 ulimit -s unlimited;

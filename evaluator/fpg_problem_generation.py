@@ -22,11 +22,12 @@ import aiofiles
 from common.constants import FPS_GLOBAL_SETTING, CORE_OPTIONS
 from common.utils import add_one_to_port
 from common.pantograph.server import PersistentServer
-from agent.problem_generation import ProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgent
+from agent.problem_generation import ProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgentV2
 
 # FPS_GLOBAL_SETTING['TO_SYNC_ENABLED'] = True
 AGENT_DICT: Dict[str, ProblemGenerationAgent] = {
-    'sft_ar' : SFT_LLMAutoregressiveProblemGenerationAgent
+    'sft_ar' : SFT_LLMAutoregressiveProblemGenerationAgent,
+    'sft_ar_v2': SFT_LLMAutoregressiveProblemGenerationAgentV2
 }
 
 
@@ -59,11 +60,11 @@ def main(
     logger.info(f'Evaluating problem generator with hyperparams: {saved_args}')
 
     # In-domain
-    problem_types = ['Algebra', 'Geometry', 'Combinatorics', 'Number Theory', 'Logic and Puzzles', 'Calculus', 'Inequalities', 'Other']
-    sources = ['cn_k12', 'olympiads', 'aops_forum', 'cn_contest', 'number_theory', 'olympiads_ref', 'amc_aime', 'inequalities']
+    problem_types = ['Algebra', 'Number Theory', 'Precalculus', 'Trigonometry', 'Arithmetic', 'Functional Equations', 'Inequalities', 'Recursion Other', 'Calculus', 'Logic and Puzzles', 'Linear Algebra', 'Combinatorics', 'Other', 'Geometry', 'unknown', 'Intermediate Algebra', 'NaN']
+    sources = ['unknown', 'number_theory', 'aops_forum', 'cn_k12', 'math_train', 'math_test', 'olympiads_ref', 'amc_aime', 'olympiads', 'inequalities', 'secondary_math', 'cn_contest', 'synthetic']
     
     # OOD
-    problem_types_ood = ['Linear Algebra', 'Abstract Algebra', 'Real Analysis', 'Topology']
+    problem_types_ood = ['Abstract Algebra', 'Real Analysis', 'Topology']
     sources_ood = ['Chinese Gaokao', 'IMO', 'Undergraduate Math Exam', 'Undergraduate Math Textbook', 'Graduate Math Exam', 'Graduate Math Textbook']
     
     base_urls = [base_url]

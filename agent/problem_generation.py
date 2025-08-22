@@ -21,7 +21,7 @@ from transformers import AutoTokenizer
 from common.constants import BANNED_TOKENS, CODEBLOCK_PATTERN, SYSTEM_PROMPT_FPG, FALSIFY_TACTICS
 from common.pantograph.server import PersistentServer, TacticFailure, ServerError
 from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
-from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft
+from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft, parse_idents
 from agent.proof_generation import ProofSearchResult, ProofSearchAgent
 
 class ProblemGenerationAgent:
@@ -61,6 +61,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
     async def gen_step_async(
             self,
             state: GoalState,
+            step_history: List[ProblemGenerationStep],
             conditions: Any,
         ) -> ProblemGenerationStep:
         """
@@ -339,9 +340,9 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
             i_trial = 0
             while i_trial < self.max_search_trials:
                 i_trial += 1
-                assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
+                # assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
                 
-                cur_step = await self.gen_step_async(cur_problem_state, conditions)
+                cur_step = await self.gen_step_async(cur_problem_state, steps, conditions)
                 log(f'Search({tag}): {i_trial}/{self.max_search_trials}, Condition {conditions}, State\n{cur_problem_state}\nStep {str(cur_step)}')
                 
                 if cur_step.is_submitting:
@@ -466,6 +467,7 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
     def gen_prompt(
         self,
         state: GoalState,
+        step_history: List[ProblemGenerationStep],
         conditions: Any,
     ) -> List[Dict[str, str]]:
         """
@@ -484,13 +486,14 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
     async def gen_step_async(
             self,
             state: GoalState,
+            step_history: List[ProblemGenerationStep],
             conditions: Any,
         ) -> str:
         """
         Given the current state and conditions, try at most `self.num_max_samples_per_trial` times to generate one step.
         """
         # Generate tactics
-        prompt = self.gen_prompt(state=state, conditions=conditions)
+        prompt = self.gen_prompt(state=state, step_history=step_history, conditions=conditions)
         for _ in range(self.num_max_samples_per_trial):
             try:
                 if 'internlm' in self.gen_model_name.lower():
@@ -523,13 +526,25 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
 
             try:
                 step = self.parse_step(outputs[0].message.content)
+                step_code = step.step
+                
+                if step.is_deducing:
+                    idents = set(remove_comments(step_code).split()).union(parse_idents(step_code))
+                    for banned_token in BANNED_TOKENS:
+                        assert banned_token not in idents, f'Banned token "{banned_token}" in step "{step_code}"'
+                elif step.is_introducing:
+                    assert step_code.startswith('have ') and step_code.endswith(' := sorry')
+                    idents = set(remove_comments(step_code).split()).union(parse_idents(step_code))
+                    for banned_token in BANNED_TOKENS[1:]:  # Assuming the first banned token is `sorry`
+                        assert banned_token not in idents, f'Banned token "{banned_token}" in step "{step_code}"'
+                else:
+                    assert step_code.startswith('submit_answer '), f'Invalid submission step: {step_code}'
+                    submission_name = step_code[len('submit_answer '):].strip()
+                    assert ' ' not in submission_name and '.' not in submission_name, f'Invalid submission name: {submission_name}'
             except Exception as e:
                 logger.debug(f'parse_step(): Failed due to {repr(e)}')
                 continue
-            step_code = step.step
-            if any(banned_token in step_code for banned_token in BANNED_TOKENS[1:]):   # Assuming the first banned token is `sorry`
-                logger.warning(f'gen_steps_async(): Tactic `{step_code}` rejected due to bannded token.')
-                continue
+
             return step
         raise RuntimeError('LLM calling budget exceeded')
 
@@ -537,6 +552,7 @@ class SFT_LLMAutoregressiveProblemGenerationAgent(LLMAutoregressiveProblemGenera
     def gen_prompt(
         self,
         state: GoalState,
+        step_history: List[ProblemGenerationStep],
         conditions: Tuple[str, str],
     ) -> List[Dict[str, str]]:
         """
@@ -639,3 +655,68 @@ Requirements
         #                 proof=None,
         #                 new_contexts=None
         #             )
+
+class SFT_LLMAutoregressiveProblemGenerationAgentV2(SFT_LLMAutoregressiveProblemGenerationAgent):
+    def gen_prompt(
+        self,
+        state: GoalState,
+        step_history: List[ProblemGenerationStep],
+        conditions: Tuple[str, str],
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
+        problem_type, source = conditions
+        context = ''
+        vars_to_format = [v for v in state.goals[0].variables]
+        while len(vars_to_format) > 0:
+            for i in range(len(vars_to_format)):
+                if i + 1 == len(vars_to_format) or not (vars_to_format[i].t == vars_to_format[i+1].t and vars_to_format[i].v is None and vars_to_format[i+1].v is None):
+                    break
+            if i == 0:
+                context += str(vars_to_format[0]) + '\n'
+                vars_to_format.pop(0)
+            else:
+                context += ' '.join([v.name if v.name is not None else "_" for v in vars_to_format[:i+1]]) + f' : {vars_to_format[0].t}\n'
+                vars_to_format = vars_to_format[i+1:]
+        
+        introduced_fvars = []
+        for step in step_history:
+            if step.is_introducing:
+                lines = step.step_draft.splitlines()
+                while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
+                    lines.pop(0)
+                step_code = '\n'.join(lines)
+                assert step_code.startswith('have ') and step_code.endswith(' := sorry')
+                introduced_fvars.append(step_code[len('have '):-len(' := sorry')])
+        
+        introduced_fvars = '\n'.join(introduced_fvars)
+        prompt = f'''Given the introduced variables/hypotheses and the current context in Lean 4, propose the single most natural next step to explore toward a beautiful conclusion — either
+- derive a new intermediate fact,
+- introduce a fresh variable or hypothesis, or
+- submit one of the local facts as the final answer.
+
+Requirements
+1. Flavoured {problem_type} and suitable for posting on forums about {source}.
+2. Fully formal Lean 4 code (inline comments in natural language are fine for planning and reasoning). Assume `import Mathlib`.
+
+# Intorduced Variables/Hypotheses
+```lean4
+{introduced_fvars}
+```
+
+# Lean 4 Context
+```lean4
+{context.rstrip()}
+```
+'''.strip()
+        return [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT_FPG
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]

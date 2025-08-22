@@ -261,7 +261,7 @@ async def async_worker(
                     # elif decl.startswith('Sort u*'):
                     #     decl = 'Sort*'
                     cur_step = ProblemGenerationStep(   # ProblemGenerationStepCategory.Introduce
-                        step_draft=f'have {name} : {var_type} := sorry', # if var_value_dict[name] is None else f'let {name} : {var_type} := {var_value_dict[name]}'
+                        step_draft=normalize_spaces(f'have {name.strip()} : {var_type.strip()} := sorry'), # if var_value_dict[name] is None else f'let {name} : {var_type} := {var_value_dict[name]}'
                         proof=None,
                         new_contexts=[]
                     )
@@ -275,7 +275,10 @@ async def async_worker(
                     idents = set(cur_step.step.split())
                     for banned_token in BANNED_TOKENS[1:]:
                         if banned_token in idents:
-                            logger.critical(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Banned token "{banned_token}" in step "{step_code}"')
+                            if any(v.name == banned_token for v in cur_problem_state.goals[0].variables):
+                                logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Banned token "{banned_token}" in step "{[cur_step.step]}", but is also in context {[str(cur_problem_state)]}')
+                            else:
+                                raise RuntimeError(f'Banned token "{banned_token}" in step "{[cur_step.step]}"')
                     
                     cur_step.new_contexts = [
                         v for v in new_problem_state.goals[0].variables if
@@ -298,7 +301,7 @@ async def async_worker(
                     assert len(next_parsed_state) == 1
                     next_parsed_goal = dacite.from_dict(Goal, next_parsed_state[0])
                     cur_step = ProblemGenerationStep(   # ProblemGenerationStepCategory.Derive
-                        step_draft=step_header + step_code,
+                        step_draft=normalize_spaces(step_header + step_code),
                         proof=[],
                         new_contexts=[]
                     )
@@ -308,7 +311,10 @@ async def async_worker(
                     idents = set(cur_step.step.split())
                     for banned_token in BANNED_TOKENS:
                         if banned_token in idents:
-                            logger.critical(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Banned token "{banned_token}" in step "{step_code}"')
+                            if any(v.name == banned_token for v in cur_problem_state.goals[0].variables):
+                                logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Banned token "{banned_token}" in step "{[cur_step.step]}", but is also in context {[str(cur_problem_state)]}')
+                            else:
+                                raise RuntimeError(f'Banned token "{banned_token}" in step "{[cur_step.step]}"')
 
                     cur_step.new_contexts = [
                         v for v in new_problem_state.goals[0].variables if
@@ -332,7 +338,7 @@ async def async_worker(
                 if ' ' in submission_name or '.' in submission_name:
                     new_name = generate_submission_name([v.name for v in cur_problem_state.goals[0].variables if v.name is not None])
                     cur_step = ProblemGenerationStep(   # ProblemGenerationStepCategory.Derive
-                        step_draft=f'have {new_name} : {init_parsed_goal.target} := {submission_name}',
+                        step_draft=normalize_spaces(f'have {new_name.strip()} : {init_parsed_goal.target.strip()} := {submission_name.strip()}'),
                         proof=[],
                         new_contexts=[]
                     )
@@ -347,7 +353,10 @@ async def async_worker(
                     idents = set(cur_step.step.split())
                     for banned_token in BANNED_TOKENS:
                         if banned_token in idents:
-                            logger.critical(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Banned token "{banned_token}" in step "{step_code}"')
+                            if any(v.name == banned_token for v in cur_problem_state.goals[0].variables):
+                                logger.warning(f'async_worker({base_cnt+idx}-{i_p}/{len(remaining_units)}): Banned token "{banned_token}" in step "{[cur_step.step]}", but is also in context {[str(cur_problem_state)]}')
+                            else:
+                                raise RuntimeError(f'Banned token "{banned_token}" in step "{[cur_step.step]}"')
                     
                     cur_step.new_contexts = [
                         v for v in new_problem_state.goals[0].variables if
@@ -363,7 +372,7 @@ async def async_worker(
                 assert submission_name in [v.name for v in cur_problem_state.goals[0].variables], f'submission_name={submission_name}, cur_problem_state={cur_problem_state}'
                 steps.append(
                     ProblemGenerationStep(   # ProblemGenerationStepCategory.Submit
-                        step_draft=f'submit_answer {submission_name}',
+                        step_draft=normalize_spaces(f'submit_answer {submission_name.strip()}'),
                         proof=None,
                         new_contexts=None
                     )
