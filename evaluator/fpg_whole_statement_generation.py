@@ -53,8 +53,9 @@ def main(
     log_prefix = 'problem_generation'+'.'
 
     os.makedirs(log_root, exist_ok=True)
-    logger.remove()
-    logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
+    if num_concurrency > 1:
+        logger.remove()
+        logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
     logger.add(osp.join(log_root, log_prefix+now+'.log'), level='DEBUG')
     logger.info(f'Evaluating problem generator with hyperparams: {saved_args}')
     assert len(proof_gen_base_urls) == len(proof_gen_api_keys), f'{len(proof_gen_base_urls)} != {len(proof_gen_api_keys)}'

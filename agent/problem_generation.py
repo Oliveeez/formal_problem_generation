@@ -43,6 +43,7 @@ class ProblemGenerationAgent:
         tag: str='',
     ) -> Optional[Tuple[List[str], List[List[Goal]]]]:
         # Decompose deductive steps result.formal_solution_draft
+        breakpoint()
         try:
             raw_steps = proof_decompose(result.formal_solution_draft)
             deductive_states: List[List[Goal]] = [init_state.goals[:]]
@@ -977,7 +978,7 @@ class SFT_LLMAutoregressiveProblemGenerationAgentV2(SFT_LLMAutoregressiveProblem
         introduced_fvars = []
         for step in step_history:
             if step.is_introducing:
-                lines = step.step_draft.splitlines()
+                lines = [l for l in step.step_draft.splitlines() if l != '']
                 while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
                     lines.pop(0)
                 step_code = '\n'.join(lines)
@@ -1087,7 +1088,6 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             # No banned token allowed
             for banned_token in BANNED_TOKENS:
                 assert banned_token not in idents, f'Banned token "{banned_token}" in proof "{proof_code}"'
-            breakpoint()
             # Goal should be solved
             final_state = await server.goal_tactic_async(init_state, 0, '{\n' + proof + '\n}')
             assert final_state.is_solved, '!final_state.is_solved'
@@ -1130,7 +1130,8 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         # Search
         try:
             # assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
-            lines = (await self.generate_statement_async(conditions)).strip().splitlines()
+            raw_code = await self.generate_statement_async(conditions)
+            lines = [l for l in raw_code.strip().splitlines() if l != '']
             load_header = []
             while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
                 load_header.append(lines.pop(0))
