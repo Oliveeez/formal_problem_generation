@@ -608,6 +608,21 @@ class ProblemGenerationStep(msgspec.Struct):
                 normalized_step_draft = replace_span(m.span(), ':= by {\n' + p + '\n}', normalized_step_draft)
             return normalized_step_draft
     
+    @property
+    def header(self) -> str:
+        header_lines = []
+        lines = [l for l in self.step.splitlines() if l.strip() != '']
+        while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
+            header_lines.append(lines.pop(0))
+        return '\n'.join(header_lines)
+    
+    @property
+    def step_code(self) -> str:
+        lines = [l for l in self.step.splitlines() if l.strip() != '']
+        while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
+            lines.pop(0)
+        return '\n'.join(lines)
+    
     def __str__(self) -> str:
         return f'''{self.category.value}
 ```lean4

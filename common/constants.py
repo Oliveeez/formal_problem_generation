@@ -53,6 +53,13 @@ BANNED_TOKENS = [
 ]
 assert BANNED_TOKENS[0] == 'sorry'  # The first banned token should be `sorry` (required by `agent/solution_search.py`)
 
+BRACKET_PAIRINGS = {
+    '(' : ')',
+    '[' : ']',
+    '{' : '}',
+    '⦃' : '⦄'
+}
+
 # For problem autoformalization
 BANNED_TOKENS_IN_SOLVING_STATE = [
     'optParam', # Don't allow optParam (to prevent misleading semantics)

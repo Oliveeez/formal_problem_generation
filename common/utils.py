@@ -18,7 +18,7 @@ import aiofiles
 from loguru import logger
 import pexpect
 
-from common.constants import Expr, _SPACES_REGEX, LOCK_WAIT_TIMEOUT, LOCK_TRY_DELAY, BANNED_TOKENS, FPS_GLOBAL_SETTING, CODEBLOCK_PATTERN
+from common.constants import Expr, _SPACES_REGEX, LOCK_WAIT_TIMEOUT, LOCK_TRY_DELAY, BANNED_TOKENS, FPS_GLOBAL_SETTING, CODEBLOCK_PATTERN, BRACKET_PAIRINGS
 
 
 replace_calc = lambda s: re.sub(r'by\s+calc', r'calc', s)
@@ -692,3 +692,52 @@ def normalize_draft(s: str) -> str:
     )).strip()
     s_filled = re.sub(r'have\s+:', r'have this :', s_normalized)
     return '\n'.join(l for l in s_filled.splitlines() if l.strip() != '')
+
+def decompose_statement(s : str) -> Tuple[str, str]:
+    s = s.strip()
+    target_split = None
+    if s.startswith('∀'):
+        target_split = ','
+        s = s[len('∀'):].strip()
+    elif s.startswith('example'):
+        target_split = ':'
+        assert s.endswith(':= sorry')
+        s = s[len('example'):-len(':= sorry')].strip()
+    else:
+        # ∀-statement with no hypotheses
+        return [], s.strip()
+    
+    base = 0
+    variables = []
+    target = None
+    while base < len(s):
+        if s[base] in ['(', '[', '{', '⦃']:
+            bracket_type = s[base]
+            bracket_pairing = BRACKET_PAIRINGS[bracket_type]
+        
+            stack_cnt = 0
+            start_end_positions = []
+
+            for i, char in enumerate(s[base:]):
+                if char == bracket_type:
+                    if stack_cnt == 0:
+                        start_position = i
+                    stack_cnt += 1
+                elif char == bracket_pairing:
+                    if stack_cnt > 0:
+                        stack_cnt -= 1
+                        if stack_cnt == 0:
+                            end_position = i
+                            start_end_positions.append((start_position, end_position))
+                            break
+            
+            start, end = start_end_positions[0]
+            variables.append(s[base+start:base+end+1])
+            base += i
+        else:
+            if s[base] == target_split:
+                target = s[base+1:].strip()
+                break
+            base += 1
+    
+    return variables, target
