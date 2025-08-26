@@ -42,7 +42,7 @@ def main(
     project_root: str='/home/ma-user/workspace/fps_pantograph/formal_problem_solving/data/MiniF2F',
     num_generation_attempt: int=5,
     temperature: float=0.7,
-    num_max_samples_per_trial: int=8,
+    num_max_samples_per_trial: int=1,
     max_tokens: int=-1,
     num_concurrency: int=12,
     resume_from: Optional[str]=None,
@@ -119,7 +119,6 @@ def main(
         server = available_servers.pop()
         try:
             server.tag = str(tag_i)
-            breakpoint()
             problem_generator: LLMWholeProblemGenerationAgent = AGENT_DICT[agent_name](
                 statement_gen_client=statement_gen_client,
                 statement_gen_model=statement_gen_model_name,

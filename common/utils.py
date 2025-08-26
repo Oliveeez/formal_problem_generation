@@ -12,6 +12,7 @@ import itertools as I
 import functools as F
 import inspect
 import signal
+import random
 
 import ipdb
 import aiofiles
@@ -19,6 +20,7 @@ from loguru import logger
 import pexpect
 
 from common.constants import Expr, _SPACES_REGEX, LOCK_WAIT_TIMEOUT, LOCK_TRY_DELAY, BANNED_TOKENS, FPS_GLOBAL_SETTING, CODEBLOCK_PATTERN, BRACKET_PAIRINGS
+from common.constants import allowed_submission_name_prefices, superscript_to_digit, subscript_to_digit, digit_to_superscript, digit_to_subscript
 
 
 replace_calc = lambda s: re.sub(r'by\s+calc', r'calc', s)
@@ -181,6 +183,16 @@ def add_one_to_port(input_string: str) -> str:
         port_number = match[-2]
         incremented_number = str(int(port_number) + 1)
         return input_string.replace(port_number, incremented_number, 1)
+    else:
+        return input_string
+
+def add_k_to_port(input_string: str, k: int) -> str:
+    match = re.findall(r'\d+', input_string)
+    
+    if match:
+        port_number = match[-2]
+        incremented_number = str(int(port_number) + k)
+        return input_string.replace(port_number, incremented_number, k)
     else:
         return input_string
 
@@ -741,3 +753,108 @@ def decompose_statement(s : str) -> Tuple[str, str]:
             base += 1
     
     return variables, target
+
+def count_indent(s: str) -> int:
+    count = 0
+    for char in s:
+        if char == ' ':
+            count += 1
+        else:
+            break
+    return count
+
+def proof_decompose(formal_proof: str) -> list[str]:
+    '''Decompose a formal solution draft into steps'''
+    # Count the minimal indents of all tactics
+    min_indents = float('inf')
+    pure_proof_lines = replace_sorry(replace_calc(remove_comments(formal_proof))).split('\n')
+    for l in pure_proof_lines:
+        if l.strip() != '':
+            min_indents = min(min_indents, count_indent(l))
+
+    # Reset the minimal indents to zero
+    levels = []
+    raw_lines = []  # (n_indents, line)
+    for l in replace_sorry(replace_calc(remove_multiline_comments(formal_proof))).rstrip().split('\n'):
+        if l.strip() == '':
+            continue
+        n_indent = count_indent(l)
+        if n_indent < min_indents:
+            assert len(remove_comments(l).strip()) == 0
+        
+        if len(remove_comments(l).strip()) == 0:
+            level = float('inf')   # Comment
+        else:
+            level = n_indent - min(n_indent, min_indents)   # Tactic
+        raw_lines.append(l[min(n_indent, min_indents):])
+        levels.append(level)
+    
+    # print('\n'.join(raw_lines))
+    is_first = True
+    parse_result = []
+    cur_block = []
+    for (level, line) in zip(levels, raw_lines):
+        # print(line)
+        if len(line.strip()) == 0:
+            continue
+        if level != 0:
+            cur_block.append(line)
+        else:   # Root-level tactic
+            if is_first:    # First tactic block: neglect and add
+                is_first = False
+                cur_block.append(line)
+            else:   # Other tactic block: end and new
+                parse_result.append('\n'.join(cur_block))
+                # print('\n<begin>\n' + parse_result[-1], end='\n<end>\n')
+                cur_block = [line]
+    
+    if len(cur_block) > 0:
+        parse_result.append('\n'.join(cur_block))
+        # print('\n<begin>\n' + parse_result[-1], end='\n<end>\n')
+    
+    return parse_result
+
+def generate_submission_name(name_list: List[str]) -> str:
+    # Parse names
+    numbers_existing = C.defaultdict(list)
+    for n in name_list:
+        for p in allowed_submission_name_prefices:
+            if n.startswith(p):
+                num_str = n[len(p):]
+                if num_str == '':
+                    numbers_existing[-1].append((p, 'text'))
+                elif all(c in superscript_to_digit for c in num_str):
+                    num = int(''.join(superscript_to_digit[c] for c in num_str))
+                    numbers_existing[num].append((p, 'sup'))
+                elif all(c in subscript_to_digit for c in num_str):
+                    num = int(''.join(subscript_to_digit[c] for c in num_str))
+                    numbers_existing[num].append((p, 'sub'))
+                elif all(c.isascii() and c.isdigit() for c in num_str):
+                    num = int(num_str)
+                    numbers_existing[num].append((p, 'text'))
+                    
+    if not numbers_existing:
+        numbers_existing = C.defaultdict(list, {
+            -1: [('h', 'text')]
+        })
+    # Generate new name
+    max_number = sorted(numbers_existing.keys())[-1]
+    number_chosen = max_number + 1
+    prefix, format_type = random.choice(numbers_existing[max_number])
+    
+    if number_chosen == 0:
+        formatted_num = ''
+    else:
+        num_str = str(number_chosen)
+        if format_type == 'sup':
+            formatted_num = ''.join(digit_to_superscript[c] for c in num_str)
+        elif format_type == 'sub':
+            formatted_num = ''.join(digit_to_subscript[c] for c in num_str)
+        else:  # text
+            formatted_num = num_str
+    new_name = f"{prefix}{formatted_num}"
+    logger.debug(f'numbers_existing={numbers_existing}, max_number={number_chosen}, new_name={new_name}')
+    return new_name
+
+def is_deductive_transition(state_before: List['Goal'], state_after: List['Goal']) -> bool:
+    return len(state_before) == 1 and len(state_after) == 1 and state_before[0].target == state_after[0].target

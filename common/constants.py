@@ -110,3 +110,18 @@ IDENT_MAP = {
     'pi_pos' : 'Real.pi_pos',
     'pi_gt_three' : 'Real.pi_gt_three'
 }
+
+superscript_to_digit = {
+    '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
+    '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9'
+}
+
+subscript_to_digit = {
+    '₀': '0', '₁': '1', '₂': '2', '₃': '3', '₄': '4',
+    '₅': '5', '₆': '6', '₇': '7', '₈': '8', '₉': '9'
+}
+
+digit_to_superscript = {v: k for k, v in superscript_to_digit.items()}
+digit_to_subscript = {v: k for k, v in subscript_to_digit.items()}
+
+allowed_submission_name_prefices = ['h', 'h_']

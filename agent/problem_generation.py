@@ -1,7 +1,7 @@
 from abc import abstractmethod
 import time
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple, Union, Dict, Set, Any
+from typing import Optional, List, Tuple, Union, Dict, Set, Any, Optional
 import collections, unittest
 import heapq
 import asyncio
@@ -18,11 +18,12 @@ from openai.types.chat.chat_completion import Choice
 from easydict import EasyDict
 import vllm
 from transformers import AutoTokenizer
+import dacite
 
-from common.constants import BANNED_TOKENS, CODEBLOCK_PATTERN, SYSTEM_PROMPT_FPG, FALSIFY_TACTICS, BRACKET_PAIRINGS, CORE_OPTIONS
+from common.constants import BANNED_TOKENS, SYSTEM_PROMPT_FPG, FALSIFY_TACTICS, BRACKET_PAIRINGS, CORE_OPTIONS
 from common.pantograph.server import PersistentServer, TacticFailure, ServerError
-from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
-from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft, parse_idents, decompose_statement
+from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, Goal, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
+from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft, parse_idents, decompose_statement, proof_decompose, generate_submission_name, is_deductive_transition
 from agent.proof_generation import ProofSearchResult, ProofSearchAgent
 
 class ProblemGenerationAgent:
@@ -35,17 +36,268 @@ class ProblemGenerationAgent:
             logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
     
     @staticmethod
-    async def decompose_async(
+    async def decompose_deductive_steps_async(
         result: ProblemGenerationProcess,
-        states: List[GoalState],
+        init_state: GoalState,
+        server: PersistentServer,
+        tag: str='',
+    ) -> Optional[Tuple[List[str], List[List[Goal]]]]:
+        # Decompose deductive steps result.formal_solution_draft
+        try:
+            raw_steps = proof_decompose(result.formal_solution_draft)
+            deductive_states: List[List[Goal]] = [init_state.goals[:]]
+            deductive_steps: List[str] = []
+            cur_state = init_state
+
+            # Stage 1. Parse deductive steps
+            while len(raw_steps) > 0:
+                # Execute cur_step
+                cur_step = raw_steps[0]
+                next_state = await server.goal_tactic_async(cur_state, 0, cur_step)
+                
+                if next_state.is_solved:
+                    if remove_comments(cur_step).strip().startswith('exact '):
+                        # If (solved) and (the final step is `exact`): add cur_step and break
+                        raw_steps = []
+                        cur_state = next_state
+                        deductive_states.append(cur_state.goals[:])
+                        deductive_steps.append(cur_step)
+                        logger.info(f"decompose_deductive_steps_async({tag}): Detected `exact` submission: {[remove_comments(cur_step).strip()]}")
+                        break
+                    else:
+                        # If (solved) but (the final step is not `exact`): don't add cur_step, don't update state
+                        raw_steps = [cur_step]
+                        logger.info(f"decompose_deductive_steps_async({tag}): Detected non-`exact` submission: {[remove_comments(cur_step).strip()]}")
+                        break   # If the final step is not `exact`, 1) do not add to `steps` - leave it for final submission; 2) do not update `cur_state`
+                else:
+                    if not is_deductive_transition(cur_state.goals, next_state.goals):
+                        # If (not solved) but (not deductive): don't add cur_step, don't update state
+                        break
+                    else:
+                        # If (not solved) and (is deductive): add cur_step and continue
+                        raw_steps.pop(0)
+                        cur_state = next_state
+                        deductive_states.append(cur_state.goals[:])
+                        deductive_steps.append(cur_step)
+
+            # Remaining non-deductive steps
+            if len(raw_steps) > 0:
+                proof_state = cur_state
+
+                submission_name = generate_submission_name([v.name for v in cur_state.goals[0].variables if v.name is not None])
+                have_step = f'have {submission_name}: {cur_state.goals[0].target} := by {{\n' + '\n'.join(raw_steps) + '\n}'
+                proof_state = await server.goal_tactic_async(proof_state, 0, have_step)
+                assert is_deductive_transition(cur_state.goals, proof_state.goals), f'`have {submission_name}` failed due to proof state: ' + str(proof_state)
+                deductive_steps.append(have_step)
+                deductive_states.append(proof_state.goals[:])
+                
+                submit_step = f'exact {submission_name}'
+                proof_state = await server.goal_tactic_async(proof_state, 0, submit_step)
+                assert proof_state.is_solved, f'`exact {submission_name}` failed due to proof state: ' + str(proof_state)
+                deductive_steps.append(submit_step)
+                deductive_states.append(proof_state.goals[:])
+
+            return deductive_steps, deductive_states
+        except Exception as e:
+            logger.error(f'decompose_deductive_steps_async({tag}): failed due to {repr(e)}, traceback: {[traceback.format_exc()]}')
+            return None
+    
+    # Stage II. Validate problem generation steps
+    @staticmethod
+    async def validate_deductive_steps_async(
+        result: ProblemGenerationProcess,
+        deductive_steps: List[Tuple[str, str]],
+        deductive_states: List[List[Goal]],
         server: PersistentServer,
         tag: str='',
         reassemble_trajectory: bool=False,
     ) -> bool:
-        # Decompose result.steps from result.formal_statement and result.formal_solution_draft
-        # TODO: Use proof decomposer
-        pass
-    
+        try:
+            assert len(deductive_states[-1]) == 0 and len(deductive_steps) + 1 != len(deductive_states), f'len(deductive_states[-1])={len(deductive_states[-1])}, len(deductive_steps)={len(deductive_steps)}, len(deductive_states)={len(deductive_states)}'
+            
+            states: List[GoalState] = []
+            steps: List[ProblemGenerationStep] = []
+            cur_problem_state = await server.load_statement_async('False')
+            states.append(cur_problem_state)
+            
+            # Execute introducing steps
+            assert len(deductive_states[0]) == 1
+            init_parsed_goal = deductive_states[0][0]
+            var_type_dict = {
+                v.name : v.t for v in init_parsed_goal.variables
+            }
+            var_value_dict = {
+                v.name : v.v for v in init_parsed_goal.variables
+            }
+            
+            # Break from formal statement
+            variables = []
+            context, target = decompose_statement(result.formal_statement)
+            for declaration in context:
+                if declaration[0] == '[':
+                    try:
+                        var_names, var_type = declaration[1:-1].split(':', 1)
+                    except ValueError:
+                        var_names = '_'
+                        var_type = declaration[1:-1]
+                    for name in var_names.strip().split():
+                        # print(name, var_type)
+                        variables.append((name.strip(), var_type))
+                else:
+                    assert '✝' not in declaration, f'declaration: {declaration}'
+                    try:
+                        var_names, var_type = declaration[1:-1].split(':', 1)
+                    except ValueError:
+                        var_names = declaration[1:-1]
+                        var_type = None
+                    for name in var_names.strip().split():
+                        if '✝' in name:
+                            # logger.critical(f"validate_deductive_steps_async({tag}): '✝' in name: {[result.formal_statement]}")
+                            name = '_'
+                        variables.append((name.strip(), var_type or var_type_dict[name.strip()]))
+            
+            for (name, var_type) in variables:
+                # name = v.name
+                # decl = v.t
+                # if '✝' in v.name:
+                #     assert v.name.replace('✝', '_') not in str(u['deductive_states'])
+                #     name = v.name.replace('✝', '_')
+                # if decl.startswith('Type u_'):
+                #     decl = 'Type*'
+                # elif decl.startswith('Sort u*'):
+                #     decl = 'Sort*'
+                cur_step = ProblemGenerationStep(   # ProblemGenerationStepCategory.Introduce
+                    step_draft=normalize_spaces(f'have {name.strip()} : {var_type.strip()} := sorry'), # if var_value_dict[name] is None else f'let {name} : {var_type} := {var_value_dict[name]}'
+                    proof=None,
+                    new_contexts=[]
+                )
+                step_code = remove_comments(cur_step.step_code)
+                # TODO: rename_i 到底会不会改变fvarid?
+                try:
+                    new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
+                except (TacticFailure, ServerError):
+                    cur_step.step_draft = result.header + cur_step.step_draft
+                    new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
+                assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
+                idents = set(step_code.split()).union(parse_idents(step_code))
+                for banned_token in BANNED_TOKENS[1:]:
+                    assert banned_token not in idents, f'Banned token "{banned_token}" in step "{step_code}"'
+                
+                cur_step.new_contexts = [
+                    v for v in new_problem_state.goals[0].variables if
+                        v.raw_name not in {vv.raw_name for vv in cur_problem_state.goals[0].variables}  # 缺陷: 存在Bug，有时Tactic application会导致无关的fvar被重新assign，且该tactic和原tactic无依赖关系
+                        # v not in cur_problem_state.goals[0].variables   # 缺陷: 可能只是改名了... —— 没事，正好是rename_i的需求！
+                        # (v not in cur_problem_state.goals[0].variables) and (v.raw_name not in {vv.raw_name for vv in cur_problem_state.goals[0].variables})  # 缺陷: 对rename_i不友好
+                ]
+                if len(cur_step.new_contexts) != 1:
+                    logger.debug(f'validate_deductive_steps_async({tag}): Introducing step potentially leading name change: {str(cur_step)}, {cur_step.new_contexts}')
+                
+                states.append(new_problem_state)
+                steps.append(cur_step)
+                cur_problem_state = new_problem_state
+            
+            if init_parsed_goal.variables != cur_problem_state.goals[0].variables:
+                logger.warning(f'validate_deductive_steps_async({tag}): init_parsed_goal.variables != cur_problem_state.goals[0].variables: {[str(init_parsed_goal), str(cur_problem_state.goals[0])]}')
+            
+            # Execute deriving steps
+            for (step_code, next_parsed_state) in zip(deductive_steps[:-1], deductive_states[1:-1]):
+                assert len(next_parsed_state) == 1
+                next_parsed_goal = dacite.from_dict(Goal, next_parsed_state[0])
+                cur_step = ProblemGenerationStep(   # ProblemGenerationStepCategory.Derive
+                    step_draft=normalize_spaces(step_code),
+                    proof=[],
+                    new_contexts=[]
+                )
+                
+                new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
+                assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
+                step_code = remove_comments(cur_step.step_code)
+                idents = set(step_code.split()).union(parse_idents(step_code))
+                for banned_token in BANNED_TOKENS:
+                    assert banned_token not in idents, f'Banned token "{banned_token}" in step "{step_code}"'
+
+                cur_step.new_contexts = [
+                    v for v in new_problem_state.goals[0].variables if
+                        v.raw_name not in {vv.raw_name for vv in cur_problem_state.goals[0].variables}
+                ]
+                if len(cur_step.new_contexts) == 0:
+                    logger.debug(f'validate_deductive_steps_async({tag}): Unused step: {str(cur_step)}')
+                
+                states.append(new_problem_state)
+                steps.append(cur_step)
+                cur_problem_state = new_problem_state
+            
+                if next_parsed_goal.variables != cur_problem_state.goals[0].variables:
+                    logger.debug(f'validate_deductive_steps_async({tag}): next_parsed_goal.variables != cur_problem_state.goals[0].variables: {[str(next_parsed_goal), str(cur_problem_state.goals[0])]}')
+            
+            # Execute submitting step
+            step_code = remove_comments(deductive_steps[-1]).strip()
+            assert step_code.startswith('exact '), step_code
+            submission_name = step_code[len('exact '):]
+            
+            if ' ' in submission_name or '.' in submission_name:
+                new_name = generate_submission_name([v.name for v in cur_problem_state.goals[0].variables if v.name is not None])
+                cur_step = ProblemGenerationStep(   # ProblemGenerationStepCategory.Derive
+                    step_draft=normalize_spaces(f'have {new_name.strip()} : {init_parsed_goal.target.strip()} := {submission_name.strip()}'),
+                    proof=[],
+                    new_contexts=[]
+                )
+                submission_name = new_name
+                
+                new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
+                assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
+                step_code = remove_comments(cur_step.step_code)
+                idents = set(step_code.split()).union(parse_idents(step_code))
+                for banned_token in BANNED_TOKENS:
+                    assert banned_token not in idents, f'Banned token "{banned_token}" in step "{step_code}"'
+                
+                cur_step.new_contexts = [
+                    v for v in new_problem_state.goals[0].variables if
+                        v.raw_name not in {vv.raw_name for vv in cur_problem_state.goals[0].variables}
+                ]
+                if len(cur_step.new_contexts) == 0:
+                    logger.debug(f'validate_deductive_steps_async({tag}): Unused step: {str(cur_step)}')
+                
+                states.append(new_problem_state)
+                steps.append(cur_step)
+                cur_problem_state = new_problem_state
+            
+            assert submission_name in [v.name for v in cur_problem_state.goals[0].variables], f'submission_name={submission_name}, cur_problem_state={cur_problem_state}'
+            steps.append(
+                ProblemGenerationStep(   # ProblemGenerationStepCategory.Submit
+                    step_draft=normalize_spaces(f'submit_answer {submission_name.strip()}'),
+                    proof=None,
+                    new_contexts=None
+                )
+            )
+            
+            # Parsed trajectory
+            result = ProblemGenerationProcess(
+                informal_problem='',
+                informal_answer='',
+                informal_solution='',
+                header=None,
+                formal_statement='',
+                formal_solution_draft='',
+                formal_proofs='',
+                steps=steps,
+                dependencies=[],
+                trajectory=[(S.goals[0].variables, i) for i, S in enumerate(states)],
+                metainfo=dict()
+            )
+            
+            # Reassemble trajectory
+            is_analyzed = await ProblemGenerationAgent.analyze_async(
+                result=result,
+                states=states,
+                server=server,
+                tag=f'{tag}',
+                reassemble_trajectory=reassemble_trajectory
+            )
+        except Exception as e:
+            logger.error(f'validate_deductive_steps_async({tag}): failed due to {repr(e)}, traceback: {[traceback.format_exc()]}')
+            return None
+
     @staticmethod
     async def analyze_async(
         result: ProblemGenerationProcess,
@@ -57,7 +309,6 @@ class ProblemGenerationAgent:
         # Dependency Analysis
         try:
             # Initialize
-            # breakpoint()
             steps = result.steps
             assert len(states) == len(steps)
             assert steps[-1].is_submitting and steps[-1].step_code.startswith('submit_answer ')
@@ -426,8 +677,8 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                 
                 # Not submitting: deducing or introducing
                 try:
-                    step_code = cur_step.step_code
-                    idents = set(remove_comments(step_code).split()).union(parse_idents(step_code))
+                    step_code = remove_comments(cur_step.step_code)
+                    idents = set(step_code.split()).union(parse_idents(step_code))
                     if cur_step.is_deducing:
                         # Validate step: 'deducing' should contain no sorries.
                         for banned_token in BANNED_TOKENS:
@@ -569,15 +820,15 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
 
             try:
                 step = self.parse_step(outputs[0].message.content)
-                step_code = step.step_code
+                step_code = remove_comments(step.step_code)
                 
                 if step.is_deducing:
-                    idents = set(remove_comments(step_code).split()).union(parse_idents(step_code))
+                    idents = set(step_code.split()).union(parse_idents(step_code))
                     for banned_token in BANNED_TOKENS:
                         assert banned_token not in idents, f'Banned token "{banned_token}" in step "{step_code}"'
                 elif step.is_introducing:
                     assert step_code.startswith('have ') and step_code.endswith(' := sorry')
-                    idents = set(remove_comments(step_code).split()).union(parse_idents(step_code))
+                    idents = set(step_code.split()).union(parse_idents(step_code))
                     for banned_token in BANNED_TOKENS[1:]:  # Assuming the first banned token is `sorry`
                         assert banned_token not in idents, f'Banned token "{banned_token}" in step "{step_code}"'
                 else:
@@ -831,13 +1082,14 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
                 n=1,
             )).choices
             proof = self.parse_proof_gen_result(outputs[0].message.content)
-            proof_code = remove_comments(proof_code)
-            idents = set(remove_comments(proof_code).split()).union(parse_idents(proof_code))
+            proof_code = remove_comments(proof)
+            idents = set(proof_code.split()).union(parse_idents(proof_code))
             # No banned token allowed
             for banned_token in BANNED_TOKENS:
                 assert banned_token not in idents, f'Banned token "{banned_token}" in proof "{proof_code}"'
+            breakpoint()
             # Goal should be solved
-            final_state = await server.goal_tactic_async('{\n' + proof + '\n}')
+            final_state = await server.goal_tactic_async(init_state, 0, '{\n' + proof + '\n}')
             assert final_state.is_solved, '!final_state.is_solved'
             return proof_code
         except:
@@ -862,6 +1114,7 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             conditions: Any,
             server: PersistentServer,
             decompose_steps: bool=False,
+            reassemble_trajectory: bool=False,
             tag: str='',
             verbose: bool=False,
         ) -> ProblemGenerationProcess:
@@ -878,7 +1131,6 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         try:
             # assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
             lines = (await self.generate_statement_async(conditions)).strip().splitlines()
-            breakpoint()
             load_header = []
             while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
                 load_header.append(lines.pop(0))
@@ -935,17 +1187,35 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             )
             
             if decompose_steps:
-                is_decomposed = self.decompose_async(result)    # TODO: parse trajectory
+                is_decomposed = self.decompose_deductive_steps_async(
+                    result=result,
+                    server=server,
+                    tag=tag,
+                    reassemble_trajectory=reassemble_trajectory
+                )
             
             result.metainfo = json.dumps(
-                result.metainfo | json.dumps({
+                json.loads(result.metainfo) | {
                     'time_consumption': time.time() - time_start,  
                     'all_formal_proofs': formal_proofs
-                })
+                }
             )
             logger.info(f'generate_async({tag}): generation succeeded.')
         except Exception as e:
             logger.error(f'generate_async({tag}): generation failed due to{[traceback.format_exc()]}')
+            result = ProblemGenerationProcess(
+                informal_problem='',
+                informal_answer='',
+                informal_solution='',
+                header='',
+                formal_statement='',
+                formal_solution_draft='',
+                formal_proofs=[],
+                steps=[],
+                dependencies=[],
+                trajectory=[],
+                metainfo=dict()
+            )
 
         await self.reset_async()
 
@@ -960,7 +1230,6 @@ Requirements
 1. Flavoured {problem_type} and suitable for posting on forums about {source}.
 2. Fully formal Lean 4 code (inline comments in natural language are fine for planning and reasoning). Assume `import Mathlib`.
 '''.strip()
-        breakpoint()
         return [
             {
                 "role": "system",
@@ -973,8 +1242,7 @@ Requirements
         ]
 
     def parse_statement_gen_result(self, output: str) -> str:
-        breakpoint()
-        return CODEBLOCK_PATTERN.findall(output)[-1]
+        return extract_code(output)
     
     def format_proof_gen_prompt(self, init_state: GoalState) -> str:
         header = ("""
@@ -993,7 +1261,6 @@ Generate a deductive proof for the following Lean 4 proof state:
 {str(init_state)}
 ```
 """.strip()
-        breakpoint()
         return [
             {
                 "role": "user",
@@ -1002,5 +1269,34 @@ Generate a deductive proof for the following Lean 4 proof state:
         ]
 
     def parse_proof_gen_result(self, output: str) -> str:
-        breakpoint()
-        return output
+        return extract_code(output)
+
+class SFT_DeductiveProofGenerator(SFT_LLMWholeProblemGenerationAgent):
+    def __init__(
+        self,
+        statements: List[str],  # Statements to generate proof
+        proof_gen_clients: List[AsyncOpenAI],
+        proof_gen_models: List[str],
+        *args,
+        num_max_samples_per_trial: int=1,
+        temperature: Optional[float]=None,
+        max_tokens: int=NOT_GIVEN,
+        **kwargs
+    ) -> None:
+        super().__init__(None, None, proof_gen_clients, proof_gen_models, *args, num_max_samples_per_trial=num_max_samples_per_trial, temperature=temperature, max_tokens=max_tokens, **kwargs)
+        self.statements = statements
+        
+    async def generate_statement_async(self, conditions: int) -> str:
+        return self.statements[conditions]
+
+    async def generate_proofs_async(self, init_state: GoalState, server: PersistentServer) -> List[Tuple[str, str]]:
+        for (client, model) in zip(self.proof_gen_clients, self.proof_gen_models):
+            proof = await self.generate_one_proof_async(
+                init_state=init_state,
+                server=server,
+                client=client,
+                model=model
+            )
+            if proof is not None:
+                return [(model, proof)]
+        return None
