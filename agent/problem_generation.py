@@ -384,7 +384,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                 # assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
                 
                 cur_step = await self.gen_step_async(cur_problem_state, steps, conditions)
-                log(f'Search({tag}): {i_trial}/{self.max_search_trials}, Condition {conditions}, State\n{cur_problem_state}\nStep {str(cur_step)}')
+                log(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, Condition {conditions}, State\n{cur_problem_state}\nStep {str(cur_step)}')
                 
                 if cur_step.is_submitting:
                     try:
@@ -393,7 +393,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                         submission_name = step_code[len('submit_answer '):]
                         assert submission_name in [v.name for v in cur_problem_state.goals[0].variables], f'submission_name={submission_name}, cur_problem_state={cur_problem_state}'
                     except:
-                        logger.debug(f'Search({tag}): {i_trial}/{self.max_search_trials}, step {cur_step.category} failed due to {repr(e)}')
+                        logger.debug(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, step {cur_step.category} failed due to {repr(e)}')
                     
                     steps.append(cur_step)
                     result = ProblemGenerationProcess(
@@ -444,7 +444,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                         raise RuntimeError(cur_step)
                     assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
                 except Exception as e:
-                    logger.debug(f'Search({tag}): {i_trial}/{self.max_search_trials}, step {cur_step.category} failed due to {repr(e)}')
+                    logger.debug(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, step {cur_step.category} failed due to {repr(e)}')
                     continue
 
 
@@ -455,16 +455,16 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                         # v not in forward_state.goals[0].variables
                 ]
                 if len(cur_step.new_contexts) == 0:
-                    logger.warning(f'Search({tag}): Unused step: {str(cur_step)}')
+                    logger.warning(f'generate_async({tag}): Unused step: {str(cur_step)}')
 
                 states.append(new_problem_state)
                 steps.append(cur_step)
                 cur_problem_state = new_problem_state
         
         except Exception as e:
-            logger.error(f'Search({tag}): {i_trial}/{self.max_search_trials}, fatal error```{[traceback.format_exc()]}```')
+            logger.error(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, fatal error```{[traceback.format_exc()]}```')
 
-        logger.info(f'Search({tag}): search finished with {i_trial} expansions.')
+        logger.info(f'generate_async({tag}): search finished with {i_trial} expansions.')
         await self.reset_async()
 
         result = ProblemGenerationProcess(
@@ -876,83 +876,82 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         
         # Search
         try:
-            for i_trial in range(self.max_search_trials):
-                # assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
-                lines = (await self.generate_statement_async(conditions)).strip().splitlines()
-                load_header = []
-                while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
-                    load_header.append(lines.pop(0))
-                
-                load_header = '\n'.join(load_header)
-                formal_statement = '\n'.join(lines)
-                assert formal_statement.startswith('example\n') and formal_statement.endswith('\n:= sorry')
-                
-                variables = []
-                context, target = decompose_statement(formal_statement)
-                for declaration in context:
-                    if declaration[0] == '[':
-                        try:
-                            var_names, var_type = declaration[1:-1].split(':', 1)
-                        except ValueError:
-                            var_names = '_'
-                            var_type = declaration[1:-1]
-                        for name in var_names.strip().split():
-                            # print(name, var_type)
-                            variables.append((name.strip(), var_type))
-                    else:
-                        assert '✝' not in declaration, f'declaration: {declaration}'
-                        try:
-                            var_names, var_type = declaration[1:-1].split(':', 1)
-                        except ValueError:
-                            var_names = declaration[1:-1]
-                            var_type = None
-                        for name in var_names.strip().split():
-                            if '✝' in name:
-                                name = '_'
-                            variables.append((name.strip(), var_type))
-                
-                init_state = await server.load_statement_async(
-                    statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
-                    intros=[v[0] for v in variables],
-                    header=load_header
-                )
-                formal_proofs = await self.generate_proofs_async(init_state, server)
-                formal_proofs.sort(key=lambda s : len(s[-1]))   # Ascending order of proof length (Kolmogorov Complexity)
-                assert len(formal_proofs) > 0, 'len(formal_proofs) == 0'
-                
-                result = ProblemGenerationProcess(
-                    informal_problem='',
-                    informal_answer='',
-                    informal_solution='',
-                    header=load_header,
-                    formal_statement=formal_statement,
-                    formal_solution_draft=formal_proofs[0][-1],
-                    formal_proofs=[],
-                    steps=[],
-                    dependencies=[],
-                    trajectory=[],
-                    metainfo=dict()
-                )
-                
-                if decompose_steps:
-                    is_decomposed = self.decompose_async(result)    # TODO: parse trajectory
-                
-                result.metainfo = json.dumps(
-                    result.metainfo | json.dumps({
-                        'time_consumption': time.time() - time_start,  
-                        'all_formal_proofs': formal_proofs
-                    })
-                )
-                
+            # assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
+            lines = (await self.generate_statement_async(conditions)).strip().splitlines()
+            breakpoint()
+            load_header = []
+            while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
+                load_header.append(lines.pop(0))
+            
+            load_header = '\n'.join(load_header)
+            formal_statement = '\n'.join(lines)
+            assert formal_statement.startswith('example\n') and formal_statement.endswith('\n:= sorry')
+            
+            variables = []
+            context, target = decompose_statement(formal_statement)
+            for declaration in context:
+                if declaration[0] == '[':
+                    try:
+                        var_names, var_type = declaration[1:-1].split(':', 1)
+                    except ValueError:
+                        var_names = '_'
+                        var_type = declaration[1:-1]
+                    for name in var_names.strip().split():
+                        # print(name, var_type)
+                        variables.append((name.strip(), var_type))
+                else:
+                    assert '✝' not in declaration, f'declaration: {declaration}'
+                    try:
+                        var_names, var_type = declaration[1:-1].split(':', 1)
+                    except ValueError:
+                        var_names = declaration[1:-1]
+                        var_type = None
+                    for name in var_names.strip().split():
+                        if '✝' in name:
+                            name = '_'
+                        variables.append((name.strip(), var_type))
+            
+            init_state = await server.load_statement_async(
+                statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
+                intros=[v[0] for v in variables],
+                header=load_header
+            )
+            formal_proofs = await self.generate_proofs_async(init_state, server)
+            formal_proofs.sort(key=lambda s : len(s[-1]))   # Ascending order of proof length (Kolmogorov Complexity)
+            assert len(formal_proofs) > 0, 'len(formal_proofs) == 0'
+            
+            result = ProblemGenerationProcess(
+                informal_problem='',
+                informal_answer='',
+                informal_solution='',
+                header=load_header,
+                formal_statement=formal_statement,
+                formal_solution_draft=formal_proofs[0][-1],
+                formal_proofs=[],
+                steps=[],
+                dependencies=[],
+                trajectory=[],
+                metainfo=dict()
+            )
+            
+            if decompose_steps:
+                is_decomposed = self.decompose_async(result)    # TODO: parse trajectory
+            
+            result.metainfo = json.dumps(
+                result.metainfo | json.dumps({
+                    'time_consumption': time.time() - time_start,  
+                    'all_formal_proofs': formal_proofs
+                })
+            )
+            logger.info(f'generate_async({tag}): generation succeeded.')
         except Exception as e:
-            logger.error(f'Search({tag}): {i_trial}/{self.max_search_trials}, fatal error```{[traceback.format_exc()]}```')
+            logger.error(f'generate_async({tag}): generation failed due to{[traceback.format_exc()]}')
 
-        logger.info(f'Search({tag}): search finished with {i_trial} expansions.')
         await self.reset_async()
 
         return result
 
-class SFT_LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
+class SFT_LLMWholeProblemGenerationAgent(LLMWholeProblemGenerationAgent):
     def format_statement_gen_prompt(self, condition: Tuple[str, str]) -> str:
         problem_type, source = condition
         prompt = f'''Propose a Lean 4 statement that explores toward a beautiful conclusion.
@@ -961,9 +960,20 @@ Requirements
 1. Flavoured {problem_type} and suitable for posting on forums about {source}.
 2. Fully formal Lean 4 code (inline comments in natural language are fine for planning and reasoning). Assume `import Mathlib`.
 '''.strip()
-        return prompt
+        breakpoint()
+        return [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT_FPG
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
 
     def parse_statement_gen_result(self, output: str) -> str:
+        breakpoint()
         return CODEBLOCK_PATTERN.findall(output)[-1]
     
     def format_proof_gen_prompt(self, init_state: GoalState) -> str:
@@ -983,7 +993,14 @@ Generate a deductive proof for the following Lean 4 proof state:
 {str(init_state)}
 ```
 """.strip()
-        return prompt
+        breakpoint()
+        return [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
 
     def parse_proof_gen_result(self, output: str) -> str:
+        breakpoint()
         return output

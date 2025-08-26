@@ -73,6 +73,7 @@ accelerate launch \
 src/train.py /home/ma-user/workspace/formal_problem_generation/formal_problem_generation/train_recipes/Goedel-Prover-V2-32B.Numina1.5_nonsynth.Cycle123.0808.yaml
 ```
 # Inference
+## Main Experiment
 ```shell
 # Load LLM
 for i_experiment in 0 1 2 3
@@ -164,6 +165,51 @@ python -m evaluator.fpg_problem_generation \
     --resume_from output/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
     --num_concurrency 64
 ```
+## Baseline - Whole Statement Generation
+```shell
+# Initialize statement generator and deductive prover
+MODEL_LIST=( \
+    "/cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior" \
+    "/cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.deductive_prover" \
+    "/cache/ckpts/Kimina-Prover-Distill-8B.Numina-Lean.deductive_prover" \
+    "/cache/ckpts/DeepSeek-Prover-V2-7B.Numina-Lean.deductive_prover" \
+)
+KEY_LIST=( \
+    "whole_statement_generatior" \
+    "deductive_prover" \
+    "deductive_prover" \
+    "deductive_prover" \
+)
+length=${#MODEL_LIST[@]}
+
+for ((i=0; i<length; i++)); do
+    export ASCEND_RT_VISIBLE_DEVICES=$i;
+    python -m vllm.entrypoints.openai.api_server \
+        --model ${MODEL_LIST[i+1]} \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key ${KEY_LIST[i+1]} \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 &
+done
+
+# Run experiment
+ulimit -s unlimited;
+python -m evaluator.fpg_whole_statement_generation \
+    --log_root output/sft_wg/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior \
+    --agent_name sft_wg \
+    --statement_gen_base_url http://0.0.0.0:37210/v1 \
+    --statement_gen_api_key whole_statement_generatior \
+    --statement_gen_model_name "/cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior" \
+    --proof_gen_base_urls "['http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1','http://0.0.0.0:37213/v1']" \
+    --proof_gen_api_keys "['deductive_prover','deductive_prover','deductive_prover']" \
+    --proof_gen_model_names "['/cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.deductive_prover','/cache/ckpts/Kimina-Prover-Distill-8B.Numina-Lean.deductive_prover','/cache/ckpts/DeepSeek-Prover-V2-7B.Numina-Lean.deductive_prover']" \
+    --num_generation_attempt 10 \
+    --num_concurrency 1
+```
+
 
 ## Bug
 ```lean4
