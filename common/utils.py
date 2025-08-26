@@ -490,7 +490,7 @@ def remove_spaces(s: str) -> str:
     """Repalce any consecutive block of whitespace characters in ``s`` with a single whitespace."""
     return _SPACES_REGEX.sub("", s).strip()
 
-def remove_comments(code):
+def remove_comments(code: str) -> str:
     code = re.sub(r'/-(.|\n)*?-/', '', code)
     code = re.sub(r'--.*', '', code)
     return code
