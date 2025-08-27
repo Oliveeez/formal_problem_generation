@@ -560,7 +560,7 @@ class PersistentServer:
             self.check_restart()
 
     async def check_restart_async(self) -> None:
-        if self.count < self.max_count: # Assuming if server is dead, self.count is set to float('inf'). 
+        if (self.count < self.max_count) and (self.server.proc is not None): # Assuming if server is dead, self.count is set to float('inf'). 
             return
         
         logger.debug(f'PersistentServer({self.tag}): Restarting...')

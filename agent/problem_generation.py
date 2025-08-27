@@ -37,12 +37,40 @@ class ProblemGenerationAgent:
     @staticmethod
     async def decompose_deductive_steps_async(
         result: ProblemGenerationProcess,
-        init_state: GoalState,
         server: PersistentServer,
         tag: str='',
     ) -> Tuple[Optional[List[str]], Optional[List[List[Goal]]]]:
         # Decompose deductive steps result.formal_solution_draft
         try:
+            variables = []
+            context, target = decompose_statement(result.formal_statement)
+            for declaration in context:
+                if declaration[0] == '[':
+                    try:
+                        var_names, var_type = declaration[1:-1].split(':', 1)
+                    except ValueError:
+                        var_names = '_'
+                        var_type = declaration[1:-1]
+                    for name in var_names.strip().split():
+                        # print(name, var_type)
+                        variables.append((name.strip(), var_type))
+                else:
+                    assert '✝' not in declaration, f'declaration: {declaration}'
+                    try:
+                        var_names, var_type = declaration[1:-1].split(':', 1)
+                    except ValueError:
+                        var_names = declaration[1:-1]
+                        var_type = None
+                    for name in var_names.strip().split():
+                        if '✝' in name:
+                            name = '_'
+                        variables.append((name.strip(), var_type))
+            init_state = await server.load_statement_async(
+                statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
+                intros=[v[0] for v in variables],
+                header=result.load_header
+            )
+            
             raw_steps = proof_decompose(result.formal_solution_draft)
             deductive_states: List[List[Goal]] = [init_state.goals[:]]
             deductive_steps: List[str] = []
@@ -1194,7 +1222,6 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             if decompose_steps:
                 deductive_steps, deductive_states = await self.decompose_deductive_steps_async(
                     result=result,
-                    init_state=init_state,
                     server=server,
                     tag=tag,
                 )
