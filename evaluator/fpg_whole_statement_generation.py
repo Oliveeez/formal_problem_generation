@@ -134,8 +134,8 @@ def main(
             result = await problem_generator.generate_async(
                 conditions=condition,
                 server=server,
-                decompose_steps=True,
-                reassemble_trajectory=True,
+                decompose_steps=False,
+                reassemble_trajectory=False,
                 tag=str(tag_i),
                 verbose=False,
             )
