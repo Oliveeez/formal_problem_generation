@@ -176,11 +176,12 @@ python -m evaluator.fpg_problem_generation \
 ## Baseline - Whole Statement Generation
 ```shell
 # Initialize statement generator and deductive prover
+
 MODEL_LIST=( \
-    "/cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack" \
-    "/cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.deductive_prover" \
-    "/cache/ckpts/Kimina-Prover-Distill-8B.Numina-Lean.deductive_prover" \
-    "/cache/ckpts/DeepSeek-Prover-V2-7B.Numina-Lean.deductive_prover" \
+    "/sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack" \
+    "/sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-8B.Numina-Lean.deductive_prover.nopack" \
+    "/sfs/liuqi/ckpts/hf_ckpts/Kimina-Prover-Distill-8B.Numina-Lean.deductive_prover.nopack" \
+    "/sfs/liuqi/ckpts/hf_ckpts/DeepSeek-Prover-V2-7B.Numina-Lean.deductive_prover.nopack" \
 )
 KEY_LIST=( \
     "whole_statement_generatior" \
@@ -210,19 +211,19 @@ python -m evaluator.fpg_whole_statement_generation \
     --agent_name sft_wg \
     --statement_gen_base_url http://0.0.0.0:37210/v1 \
     --statement_gen_api_key whole_statement_generatior \
-    --statement_gen_model_name "/cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack" \
+    --statement_gen_model_name "/sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack" \
     --proof_gen_base_urls "['http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1','http://0.0.0.0:37213/v1']" \
     --proof_gen_api_keys "['deductive_prover','deductive_prover','deductive_prover']" \
-    --proof_gen_model_names "['/cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.deductive_prover','/cache/ckpts/Kimina-Prover-Distill-8B.Numina-Lean.deductive_prover','/cache/ckpts/DeepSeek-Prover-V2-7B.Numina-Lean.deductive_prover']" \
+    --proof_gen_model_names "['/sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-8B.Numina-Lean.deductive_prover.nopack','/sfs/liuqi/ckpts/hf_ckpts/Kimina-Prover-Distill-8B.Numina-Lean.deductive_prover.nopack','/sfs/liuqi/ckpts/hf_ckpts/DeepSeek-Prover-V2-7B.Numina-Lean.deductive_prover.nopack']" \
     --num_generation_attempt 10 \
-    --num_concurrency 1
+    --num_concurrency 8
 
 # Try
 curl http://0.0.0.0:37210/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer whole_statement_generatior" \
   -d '{
-        "model": "/cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack",
+        "model": "/sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack",
         "messages": [
           {"role": "system", "content": "You are an Olympiad problem setter and a Lean 4 expert.\nYou revel in conjuring elegant problems — starting from a spare set of hypotheses, you let rigorous deduction lead you to surprising and beautiful conclusions."},
           {"role": "user", "content": "Propose a Lean 4 statement that explores toward a beautiful conclusion.\n\nRequirements\n1. Flavoured Inequalities and suitable for posting on forums about olympiads.\n2. Fully formal Lean 4 code (inline comments in natural language are fine for planning and reasoning). Assume `import Mathlib`."}

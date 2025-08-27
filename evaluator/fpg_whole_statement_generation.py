@@ -140,7 +140,7 @@ def main(
                 verbose=False,
             )
             
-            logger.info(f'generate_worker({tag_i}, {condition}): generation finished: {result.header + NEWLINE or ""}{result.formal_statement}')
+            logger.info(f'generate_worker({tag_i}, {condition}): generation finished: {(result.header + NEWLINE) if result else ""}{result.formal_statement}')
             finished[key] = result
         except Exception as e:
             logger.info(f'generate_worker({tag_i}, {condition}): generation failed due to: {repr(e)}\n{traceback.format_exc()}')
