@@ -99,7 +99,7 @@ class ProblemGenerationAgent:
             return deductive_steps, deductive_states
         except Exception as e:
             logger.error(f'decompose_deductive_steps_async({tag}): failed due to {repr(e)}, traceback: {[traceback.format_exc()]}')
-            breakpoint()
+            # breakpoint()
             return None, None
     
     # Stage II. Validate problem generation steps
@@ -289,7 +289,7 @@ class ProblemGenerationAgent:
             return is_analyzed
         except Exception as e:
             logger.error(f'validate_deductive_steps_async({tag}): failed due to {repr(e)}, traceback: {[traceback.format_exc()]}')
-            breakpoint()
+            # breakpoint()
             return False
 
     @staticmethod
@@ -463,14 +463,14 @@ class ProblemGenerationAgent:
                             G.remove_node(action_id)
                             deductive_state = new_deductive_state
                         except Exception as e:
-                            breakpoint()
+                            # breakpoint()
                             logger.debug(f'analyze_async({tag}): [{i}/{len(available_actions)}] available actions failed due to {repr(e)}')
                     if not is_success:
                         raise RuntimeError('All available actions failed.')
                 
         except Exception as e:
             logger.warning(f'analyze_async({tag}): Failed due to {repr(e)}')
-            breakpoint()
+            # breakpoint()
             logger.debug(f'analyze_async({tag}): Failed traceback {[traceback.format_exc()]}')
             # # reduced_dependency_graph = nx.algorithms.dag.transitive_reduction(dependency_graph)
             # import matplotlib.pyplot as plt
