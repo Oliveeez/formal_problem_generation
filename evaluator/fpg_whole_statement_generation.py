@@ -139,8 +139,9 @@ def main(
                 tag=str(tag_i),
                 verbose=False,
             )
-            
-            logger.info(f'generate_worker({tag_i}, {condition}): generation finished: {"" if result.header is None else (result.header.rstrip() + NEWLINE)}{result.formal_statement}')
+            if result.formal_solution_draft is not None:
+                logger.opt(colors=True).info(f'<green>generate_worker({tag_i}, {condition}): generation succeeded.</green>')
+                logger.info("" if result.header is None else (result.header.rstrip() + NEWLINE) + result.formal_statement)
             finished[key] = result
         except Exception as e:
             logger.info(f'generate_worker({tag_i}, {condition}): generation failed due to: {repr(e)}\n{traceback.format_exc()}')

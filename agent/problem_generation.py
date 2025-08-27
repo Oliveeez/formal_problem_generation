@@ -89,12 +89,12 @@ class ProblemGenerationAgent:
                         cur_state = next_state
                         deductive_states.append(cur_state.goals[:])
                         deductive_steps.append(cur_step)
-                        logger.info(f"decompose_deductive_steps_async({tag}): Detected `exact` submission: {[remove_comments(cur_step).strip()]}")
+                        logger.debug(f"decompose_deductive_steps_async({tag}): Detected `exact` submission: {[remove_comments(cur_step).strip()]}")
                         break
                     else:
                         # If (solved) but (the final step is not `exact`): don't add cur_step, don't update state
                         raw_steps = [cur_step]
-                        logger.info(f"decompose_deductive_steps_async({tag}): Detected non-`exact` submission: {[remove_comments(cur_step).strip()]}")
+                        logger.debug(f"decompose_deductive_steps_async({tag}): Detected non-`exact` submission: {[remove_comments(cur_step).strip()]}")
                         break   # If the final step is not `exact`, 1) do not add to `steps` - leave it for final submission; 2) do not update `cur_state`
                 else:
                     if not is_deductive_transition(cur_state.goals, next_state.goals):
@@ -677,7 +677,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                         informal_solution='',
                         header=None,
                         formal_statement='',
-                        formal_solution_draft='',
+                        formal_solution_draft=None,
                         formal_proofs='',
                         steps=steps,
                         dependencies=[],
@@ -749,7 +749,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
             informal_solution='',
             header=None,
             formal_statement='',
-            formal_solution_draft='',
+            formal_solution_draft=None,
             formal_proofs='',
             steps=steps,
             dependencies=[],
