@@ -176,7 +176,7 @@ class ProblemGenerationAgent:
                 try:
                     new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
                 except (TacticFailure, ServerError):
-                    cur_step.step_draft = result.header.rstrip() + '\n' + cur_step.step_draft
+                    cur_step.step_draft = '\n'.join(l.strip() + ' in' for l in result.header.splitlines() if l.strip() != '') + '\n' + cur_step.step_draft
                     new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
                 assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
                 idents = set(step_code.split()).union(parse_idents(step_code))
@@ -247,7 +247,7 @@ class ProblemGenerationAgent:
                 try:
                     new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
                 except (TacticFailure, ServerError):
-                    cur_step.step_draft = result.header.rstrip() + '\n' + cur_step.step_draft
+                    cur_step.step_draft = '\n'.join(l.strip() + ' in' for l in result.header.splitlines() if l.strip() != '') + '\n' + cur_step.step_draft
                     new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
                 assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
                 step_code = remove_comments(cur_step.step_code)
