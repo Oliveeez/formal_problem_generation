@@ -1140,51 +1140,54 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         # Search
         try:
             # assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
-            raw_code = await self.generate_statement_async(conditions)
-            lines = [l for l in raw_code.strip().splitlines() if l != '']
-            load_header = []
-            while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
-                load_header.append(lines.pop(0))
+            try:
+                raw_code = await self.generate_statement_async(conditions)
+                lines = [l for l in raw_code.strip().splitlines() if l != '']
+                load_header = []
+                while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
+                    load_header.append(lines.pop(0))
+                
+                load_header = '\n'.join(load_header)
+                formal_statement = '\n'.join(lines)
+                assert formal_statement.startswith('example\n') and formal_statement.endswith('\n:= sorry')
+                
+                variables = []
+                context, target = decompose_statement(formal_statement)
+                for declaration in context:
+                    if declaration[0] == '[':
+                        try:
+                            var_names, var_type = declaration[1:-1].split(':', 1)
+                        except ValueError:
+                            var_names = '_'
+                            var_type = declaration[1:-1]
+                        for name in var_names.strip().split():
+                            # print(name, var_type)
+                            variables.append((name.strip(), var_type))
+                    else:
+                        assert '✝' not in declaration, f'declaration: {declaration}'
+                        try:
+                            var_names, var_type = declaration[1:-1].split(':', 1)
+                        except ValueError:
+                            var_names = declaration[1:-1]
+                            var_type = None
+                        for name in var_names.strip().split():
+                            if '✝' in name:
+                                name = '_'
+                            variables.append((name.strip(), var_type))
             
-            load_header = '\n'.join(load_header)
-            formal_statement = '\n'.join(lines)
-            assert formal_statement.startswith('example\n') and formal_statement.endswith('\n:= sorry')
+                init_state = await server.load_statement_async(
+                    statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
+                    intros=[v[0] for v in variables],
+                    header=load_header
+                )
+                result.header = load_header
+                result.formal_statement = formal_statement
+            except Exception as e:
+                raise RuntimeError(f'Statement generation: {repr(e)}')
             
-            result.header = load_header
-            result.formal_statement = formal_statement
-            
-            variables = []
-            context, target = decompose_statement(formal_statement)
-            for declaration in context:
-                if declaration[0] == '[':
-                    try:
-                        var_names, var_type = declaration[1:-1].split(':', 1)
-                    except ValueError:
-                        var_names = '_'
-                        var_type = declaration[1:-1]
-                    for name in var_names.strip().split():
-                        # print(name, var_type)
-                        variables.append((name.strip(), var_type))
-                else:
-                    assert '✝' not in declaration, f'declaration: {declaration}'
-                    try:
-                        var_names, var_type = declaration[1:-1].split(':', 1)
-                    except ValueError:
-                        var_names = declaration[1:-1]
-                        var_type = None
-                    for name in var_names.strip().split():
-                        if '✝' in name:
-                            name = '_'
-                        variables.append((name.strip(), var_type))
-            
-            init_state = await server.load_statement_async(
-                statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
-                intros=[v[0] for v in variables],
-                header=load_header
-            )
             formal_proofs = await self.generate_proofs_async(init_state, server)
             formal_proofs.sort(key=lambda s : len(s[-1]))   # Ascending order of proof length (Kolmogorov Complexity)
-            assert len(formal_proofs) > 0, 'len(formal_proofs) == 0'
+            assert len(formal_proofs) > 0, 'Proof generation failed.'
             
             result.formal_solution_draft = formal_proofs[0][-1]
             
@@ -1209,7 +1212,8 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             result.metainfo['all_formal_proofs'] = formal_proofs
             logger.info(f'generate_async({tag}): generation succeeded.')
         except Exception as e:
-            logger.error(f'generate_async({tag}): generation failed due to{[traceback.format_exc()]}')
+            logger.debug(f'generate_async({tag}): generation failed due to traceback: {traceback.format_exc()}')
+            logger.error(f'generate_async({tag}): generation failed due to {repr(e)}')
             
         await self.reset_async()
 
