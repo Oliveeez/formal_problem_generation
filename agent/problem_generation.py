@@ -68,7 +68,7 @@ class ProblemGenerationAgent:
             init_state = await server.load_statement_async(
                 statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
                 intros=[v[0] for v in variables],
-                header=result.load_header
+                header=result.header
             )
             
             raw_steps = proof_decompose(result.formal_solution_draft)
@@ -1216,6 +1216,7 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             formal_proofs = await self.generate_proofs_async(init_state, server)
             formal_proofs.sort(key=lambda s : len(s[-1]))   # Ascending order of proof length (Kolmogorov Complexity)
             assert len(formal_proofs) > 0, 'Proof generation failed.'
+            logger.info(f'generate_async({tag}): Proven by {[s[0] for s in formal_proofs]}')
             
             result.formal_solution_draft = formal_proofs[0][-1]
             
