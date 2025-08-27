@@ -24,6 +24,7 @@ from common.utils import add_one_to_port
 from common.pantograph.server import PersistentServer
 from agent.problem_generation import ProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgentV2
 
+NEWLINE = '\n'
 # FPS_GLOBAL_SETTING['TO_SYNC_ENABLED'] = True
 AGENT_DICT: Dict[str, ProblemGenerationAgent] = {
     'sft_ar' : SFT_LLMAutoregressiveProblemGenerationAgent,
@@ -41,7 +42,7 @@ def main(
     project_root: str='/home/ma-user/workspace/fps_pantograph/formal_problem_solving/data/MiniF2F',
     num_generation_attempt: int=5,
     reassemble_trajectory: bool=False,
-    temperature: float=0.7,
+    temperature: float=1.0,
     max_search_trials: int=80,
     num_max_samples_per_trial: int=8,
     max_tokens: int=-1,
@@ -130,7 +131,7 @@ def main(
                 verbose=False,
             )
             
-            logger.info(f'generate_worker({tag_i}, {condition}): generation finished: {result.formal_statement}')
+            logger.info(f'generate_worker({tag_i}, {condition}): generation finished: {result.header + NEWLINE or ""}{result.formal_statement}')
             finished[key] = result
         except Exception as e:
             logger.info(f'generate_worker({tag_i}, {condition}): generation failed due to: {repr(e)}\n{traceback.format_exc()}')

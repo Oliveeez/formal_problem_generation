@@ -20,7 +20,7 @@ from loguru import logger
 import pexpect
 
 from common.constants import Expr, _SPACES_REGEX, LOCK_WAIT_TIMEOUT, LOCK_TRY_DELAY, BANNED_TOKENS, FPS_GLOBAL_SETTING, CODEBLOCK_PATTERN, BRACKET_PAIRINGS
-from common.constants import allowed_submission_name_prefices, superscript_to_digit, subscript_to_digit, digit_to_superscript, digit_to_subscript
+from common.constants import allowed_submission_name_prefices, superscript_to_digit, subscript_to_digit, digit_to_superscript, digit_to_subscript, MULTILINE_COMMENT_PLACEHOLDER, SINGLELINE_COMMENT_PLACEHOLDER, TACTIC_BLOCK_PLACEHOLDER, MULTILINE_COMMENT_PATTERN, SINGLELINE_COMMENT_PATTERN
 
 
 replace_calc = lambda s: re.sub(r'by\s+calc', r'calc', s)
@@ -763,7 +763,134 @@ def count_indent(s: str) -> int:
             break
     return count
 
-def proof_decompose(formal_proof: str) -> list[str]:
+def is_after_associative(s : str) -> bool:
+    # Whether `s` should be placed in the `next`-block
+    s = s.strip()
+    return s == MULTILINE_COMMENT_PLACEHOLDER or s == SINGLELINE_COMMENT_PLACEHOLDER or s.startswith('open ') or s.startswith('set_option ')
+
+def is_before_associative(s : str) -> bool:
+    # Whether `s` should be placed in the `current`-block
+    s = s.strip()
+    return s == TACTIC_BLOCK_PLACEHOLDER
+
+def replace_special_char(special_char: str, str_list: list[str], target_str: str) -> tuple[str, list[str]]:
+    N = target_str.count(special_char)
+    assert len(str_list) >= N
+    
+    parts = target_str.split(special_char)
+    replaced_str = ''
+    
+    for i in range(N):
+        replaced_str += parts[i] + str_list[i]
+    replaced_str += ''.join(parts[-1])
+    
+    remaining_list = str_list[N:]
+    return replaced_str, remaining_list
+
+def proof_decompose_v2(formal_proof: str) -> list[str]:
+    '''
+    Decompose a formal solution draft into steps
+    This version considers tactic blocks ('{}'), multi/single-line comments, and headers (`open`, `set_option`)
+    '''
+
+    # Preprocess: replace all comments and tactic blocks into placeholders
+    formal_proof_processed = formal_proof.rstrip()
+
+    multiline_comments = MULTILINE_COMMENT_PATTERN.findall(formal_proof_processed)
+    formal_proof_processed = MULTILINE_COMMENT_PATTERN.sub(MULTILINE_COMMENT_PLACEHOLDER, formal_proof_processed)
+    singleline_comments = SINGLELINE_COMMENT_PATTERN.findall(formal_proof_processed)
+    formal_proof_processed = SINGLELINE_COMMENT_PATTERN.sub(SINGLELINE_COMMENT_PLACEHOLDER, formal_proof_processed)
+
+    tactic_blocks = []
+    formal_proof_processed_pieces = []
+    start = -1
+    depth = 0
+    last_end = 0
+
+    for i, c in enumerate(formal_proof_processed):
+        if c == '{':
+            depth += 1
+            if depth == 1:
+                start = i
+        elif c == '}' and depth > 0:
+            depth -= 1
+            if depth == 0 and start != -1:
+                formal_proof_processed_pieces.append(formal_proof_processed[last_end:start])
+                formal_proof_processed_pieces.append(TACTIC_BLOCK_PLACEHOLDER)
+                tactic_blocks.append(formal_proof_processed[start:i+1])
+                last_end = i + 1
+                start = -1
+
+    formal_proof_processed_pieces.append(formal_proof_processed[last_end:])
+    formal_proof_processed = ''.join(formal_proof_processed_pieces)
+
+    # Count minimal indents
+    min_indents = float('inf')
+    for l in formal_proof_processed.split('\n'):
+        if l.strip() != '' and l.strip() != MULTILINE_COMMENT_PLACEHOLDER and l.strip() != SINGLELINE_COMMENT_PLACEHOLDER and l.strip() != TACTIC_BLOCK_PLACEHOLDER:
+            # Only count tactic applications
+            min_indents = min(min_indents, count_indent(l))
+
+    # Reset the minimal indents to zero
+    levels = []
+    raw_lines = []  # (n_indents, line)
+    for l in formal_proof_processed.split('\n'):
+        if l.strip() == '': # Remove empty lines
+            continue
+        n_indent = count_indent(l)
+        if is_before_associative(l) or is_after_associative(l):
+            level = float('inf')   # Comment or end-of-block
+        else:
+            level = n_indent - min(n_indent, min_indents)   # Tactic
+        raw_lines.append(l[min(n_indent, min_indents):])
+        levels.append(level)
+
+    # print('\n'.join(raw_lines))
+    is_first = True
+    parse_result = []
+    cur_block = []
+    next_block = []
+    for (level, line) in zip(levels, raw_lines):
+        # print(line)
+        if line.strip() == '':
+            continue
+        if level != 0:
+            if is_after_associative(line):
+                next_block.append(line)
+            else:
+                cur_block.extend(next_block)
+                next_block.clear()
+                cur_block.append(line)
+        else:   # Root-level tactic
+            if is_first:    # First tactic block: neglect and add
+                is_first = False
+                cur_block = next_block
+                cur_block.append(line)
+                next_block = []
+            else:   # Other tactic block: end and new
+                parse_result.append('\n'.join(cur_block))
+                # print('\n<begin>\n' + parse_result[-1], end='\n<end>\n')
+                cur_block = next_block
+                cur_block.append(line)
+                next_block = []
+
+    if len(cur_block) > 0:
+        parse_result.append('\n'.join(cur_block))
+        # print('\n<begin>\n' + parse_result[-1], end='\n<end>\n')
+
+    for (i_r, code_block) in enumerate(parse_result):
+        # Add tactic blocks back
+        code_block, tactic_blocks = replace_special_char(TACTIC_BLOCK_PLACEHOLDER, tactic_blocks, code_block)
+        code_block, singleline_comments = replace_special_char(SINGLELINE_COMMENT_PLACEHOLDER, singleline_comments, code_block)
+        code_block, multiline_comments = replace_special_char(MULTILINE_COMMENT_PLACEHOLDER, multiline_comments, code_block)
+        parse_result[i_r] = code_block
+
+    assert len(multiline_comments) == 0
+    assert len(singleline_comments) == 0
+    assert len(tactic_blocks) == 0
+    return parse_result
+
+def proof_decompose_v1(formal_proof: str) -> list[str]:
     '''Decompose a formal solution draft into steps'''
     # Count the minimal indents of all tactics
     min_indents = float('inf')
@@ -813,6 +940,8 @@ def proof_decompose(formal_proof: str) -> list[str]:
         # print('\n<begin>\n' + parse_result[-1], end='\n<end>\n')
     
     return parse_result
+
+proof_decompose = proof_decompose_v2
 
 def generate_submission_name(name_list: List[str]) -> str:
     # Parse names

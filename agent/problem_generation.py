@@ -18,7 +18,6 @@ from openai.types.chat.chat_completion import Choice
 from easydict import EasyDict
 import vllm
 from transformers import AutoTokenizer
-import dacite
 
 from common.constants import BANNED_TOKENS, SYSTEM_PROMPT_FPG, FALSIFY_TACTICS, BRACKET_PAIRINGS, CORE_OPTIONS
 from common.pantograph.server import PersistentServer, TacticFailure, ServerError
@@ -41,9 +40,8 @@ class ProblemGenerationAgent:
         init_state: GoalState,
         server: PersistentServer,
         tag: str='',
-    ) -> Optional[Tuple[List[str], List[List[Goal]]]]:
+    ) -> Tuple[Optional[List[str]], Optional[List[List[Goal]]]]:
         # Decompose deductive steps result.formal_solution_draft
-        breakpoint()
         try:
             raw_steps = proof_decompose(result.formal_solution_draft)
             deductive_states: List[List[Goal]] = [init_state.goals[:]]
@@ -101,7 +99,8 @@ class ProblemGenerationAgent:
             return deductive_steps, deductive_states
         except Exception as e:
             logger.error(f'decompose_deductive_steps_async({tag}): failed due to {repr(e)}, traceback: {[traceback.format_exc()]}')
-            return None
+            breakpoint()
+            return None, None
     
     # Stage II. Validate problem generation steps
     @staticmethod
@@ -114,7 +113,7 @@ class ProblemGenerationAgent:
         reassemble_trajectory: bool=False,
     ) -> bool:
         try:
-            assert len(deductive_states[-1]) == 0 and len(deductive_steps) + 1 != len(deductive_states), f'len(deductive_states[-1])={len(deductive_states[-1])}, len(deductive_steps)={len(deductive_steps)}, len(deductive_states)={len(deductive_states)}'
+            assert len(deductive_states[-1]) == 0 and len(deductive_steps) + 1 == len(deductive_states), f'len(deductive_states[-1])={len(deductive_states[-1])}, len(deductive_steps)={len(deductive_steps)}, len(deductive_states)={len(deductive_states)}'
             
             states: List[GoalState] = []
             steps: List[ProblemGenerationStep] = []
@@ -168,7 +167,7 @@ class ProblemGenerationAgent:
                 # elif decl.startswith('Sort u*'):
                 #     decl = 'Sort*'
                 cur_step = ProblemGenerationStep(   # ProblemGenerationStepCategory.Introduce
-                    step_draft=normalize_spaces(f'have {name.strip()} : {var_type.strip()} := sorry'), # if var_value_dict[name] is None else f'let {name} : {var_type} := {var_value_dict[name]}'
+                    step_draft=f'have {name.strip()} : {var_type.strip()} := sorry', # if var_value_dict[name] is None else f'let {name} : {var_type} := {var_value_dict[name]}'
                     proof=None,
                     new_contexts=[]
                 )
@@ -203,9 +202,9 @@ class ProblemGenerationAgent:
             # Execute deriving steps
             for (step_code, next_parsed_state) in zip(deductive_steps[:-1], deductive_states[1:-1]):
                 assert len(next_parsed_state) == 1
-                next_parsed_goal = dacite.from_dict(Goal, next_parsed_state[0])
+                next_parsed_goal = next_parsed_state[0]
                 cur_step = ProblemGenerationStep(   # ProblemGenerationStepCategory.Derive
-                    step_draft=normalize_spaces(step_code),
+                    step_draft=step_code,
                     proof=[],
                     new_contexts=[]
                 )
@@ -239,13 +238,17 @@ class ProblemGenerationAgent:
             if ' ' in submission_name or '.' in submission_name:
                 new_name = generate_submission_name([v.name for v in cur_problem_state.goals[0].variables if v.name is not None])
                 cur_step = ProblemGenerationStep(   # ProblemGenerationStepCategory.Derive
-                    step_draft=normalize_spaces(f'have {new_name.strip()} : {init_parsed_goal.target.strip()} := {submission_name.strip()}'),
+                    step_draft=f'have {new_name.strip()} : {init_parsed_goal.target.strip()} := {submission_name.strip()}',
                     proof=[],
                     new_contexts=[]
                 )
                 submission_name = new_name
                 
-                new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
+                try:
+                    new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
+                except (TacticFailure, ServerError):
+                    cur_step.step_draft = result.header + cur_step.step_draft
+                    new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
                 assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
                 step_code = remove_comments(cur_step.step_code)
                 idents = set(step_code.split()).union(parse_idents(step_code))
@@ -266,26 +269,14 @@ class ProblemGenerationAgent:
             assert submission_name in [v.name for v in cur_problem_state.goals[0].variables], f'submission_name={submission_name}, cur_problem_state={cur_problem_state}'
             steps.append(
                 ProblemGenerationStep(   # ProblemGenerationStepCategory.Submit
-                    step_draft=normalize_spaces(f'submit_answer {submission_name.strip()}'),
+                    step_draft=f'submit_answer {submission_name.strip()}',
                     proof=None,
                     new_contexts=None
                 )
             )
             
-            # Parsed trajectory
-            result = ProblemGenerationProcess(
-                informal_problem='',
-                informal_answer='',
-                informal_solution='',
-                header=None,
-                formal_statement='',
-                formal_solution_draft='',
-                formal_proofs='',
-                steps=steps,
-                dependencies=[],
-                trajectory=[(S.goals[0].variables, i) for i, S in enumerate(states)],
-                metainfo=dict()
-            )
+            result.steps = steps
+            result.trajectory = [(S.goals[0].variables, i) for i, S in enumerate(states)]
             
             # Reassemble trajectory
             is_analyzed = await ProblemGenerationAgent.analyze_async(
@@ -295,9 +286,11 @@ class ProblemGenerationAgent:
                 tag=f'{tag}',
                 reassemble_trajectory=reassemble_trajectory
             )
+            return is_analyzed
         except Exception as e:
             logger.error(f'validate_deductive_steps_async({tag}): failed due to {repr(e)}, traceback: {[traceback.format_exc()]}')
-            return None
+            breakpoint()
+            return False
 
     @staticmethod
     async def analyze_async(
@@ -470,12 +463,14 @@ class ProblemGenerationAgent:
                             G.remove_node(action_id)
                             deductive_state = new_deductive_state
                         except Exception as e:
+                            breakpoint()
                             logger.debug(f'analyze_async({tag}): [{i}/{len(available_actions)}] available actions failed due to {repr(e)}')
                     if not is_success:
                         raise RuntimeError('All available actions failed.')
                 
         except Exception as e:
             logger.warning(f'analyze_async({tag}): Failed due to {repr(e)}')
+            breakpoint()
             logger.debug(f'analyze_async({tag}): Failed traceback {[traceback.format_exc()]}')
             # # reduced_dependency_graph = nx.algorithms.dag.transitive_reduction(dependency_graph)
             # import matplotlib.pyplot as plt
@@ -673,7 +668,8 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                         tag=tag,
                         reassemble_trajectory=reassemble_trajectory
                     )
-                    result.metainfo = json.dumps(result.metainfo | {'time_consumption': time.time() - time_start})
+                    result.metainfo['time_consumption'] = time.time() - time_start
+                    result.metainfo = json.dumps(result.metainfo)
                     return result
                 
                 # Not submitting: deducing or introducing
@@ -1127,6 +1123,20 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         time_start = time.time()
         log = logger.info if verbose else logger.debug
         
+        result = ProblemGenerationProcess(
+            informal_problem='',
+            informal_answer='',
+            informal_solution='',
+            header=None,
+            formal_statement='',
+            formal_solution_draft=None,
+            formal_proofs=[],
+            steps=[],
+            dependencies=[],
+            trajectory=[],
+            metainfo=dict()
+        )
+        
         # Search
         try:
             # assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
@@ -1139,6 +1149,9 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             load_header = '\n'.join(load_header)
             formal_statement = '\n'.join(lines)
             assert formal_statement.startswith('example\n') and formal_statement.endswith('\n:= sorry')
+            
+            result.header = load_header
+            result.formal_statement = formal_statement
             
             variables = []
             context, target = decompose_statement(formal_statement)
@@ -1173,53 +1186,35 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             formal_proofs.sort(key=lambda s : len(s[-1]))   # Ascending order of proof length (Kolmogorov Complexity)
             assert len(formal_proofs) > 0, 'len(formal_proofs) == 0'
             
-            result = ProblemGenerationProcess(
-                informal_problem='',
-                informal_answer='',
-                informal_solution='',
-                header=load_header,
-                formal_statement=formal_statement,
-                formal_solution_draft=formal_proofs[0][-1],
-                formal_proofs=[],
-                steps=[],
-                dependencies=[],
-                trajectory=[],
-                metainfo=dict()
-            )
+            result.formal_solution_draft = formal_proofs[0][-1]
             
             if decompose_steps:
-                is_decomposed = self.decompose_deductive_steps_async(
+                deductive_steps, deductive_states = await self.decompose_deductive_steps_async(
                     result=result,
+                    init_state=init_state,
                     server=server,
                     tag=tag,
-                    reassemble_trajectory=reassemble_trajectory
                 )
-            
-            result.metainfo = json.dumps(
-                json.loads(result.metainfo) | {
-                    'time_consumption': time.time() - time_start,  
-                    'all_formal_proofs': formal_proofs
-                }
-            )
+                
+                if deductive_steps is not None:
+                    is_valid = await self.validate_deductive_steps_async(
+                        result=result,
+                        deductive_steps=deductive_steps,
+                        deductive_states=deductive_states,
+                        server=server,
+                        tag=tag,
+                        reassemble_trajectory=reassemble_trajectory
+                    )
+                
+            result.metainfo['all_formal_proofs'] = formal_proofs
             logger.info(f'generate_async({tag}): generation succeeded.')
         except Exception as e:
             logger.error(f'generate_async({tag}): generation failed due to{[traceback.format_exc()]}')
-            result = ProblemGenerationProcess(
-                informal_problem='',
-                informal_answer='',
-                informal_solution='',
-                header='',
-                formal_statement='',
-                formal_solution_draft='',
-                formal_proofs=[],
-                steps=[],
-                dependencies=[],
-                trajectory=[],
-                metainfo=dict()
-            )
-
+            
         await self.reset_async()
 
+        result.metainfo['time_consumption'] = time.time() - time_start
+        result.metainfo = json.dumps(result.metainfo)
         return result
 
 class SFT_LLMWholeProblemGenerationAgent(LLMWholeProblemGenerationAgent):

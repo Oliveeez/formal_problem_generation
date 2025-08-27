@@ -24,6 +24,7 @@ from common.utils import add_one_to_port
 from common.pantograph.server import PersistentServer
 from agent.problem_generation import LLMWholeProblemGenerationAgent, SFT_LLMWholeProblemGenerationAgent
 
+NEWLINE = '\n'
 # FPS_GLOBAL_SETTING['TO_SYNC_ENABLED'] = True
 AGENT_DICT: Dict[str, LLMWholeProblemGenerationAgent] = {
     'sft_wg': SFT_LLMWholeProblemGenerationAgent
@@ -41,11 +42,12 @@ def main(
     proof_gen_model_names: List[str],
     project_root: str='/home/ma-user/workspace/fps_pantograph/formal_problem_solving/data/MiniF2F',
     num_generation_attempt: int=5,
-    temperature: float=0.7,
+    temperature: float=1.0,
     num_max_samples_per_trial: int=1,
     max_tokens: int=-1,
     num_concurrency: int=12,
     resume_from: Optional[str]=None,
+    debug: bool=False,
 ):
     saved_args = {**locals()}
     
@@ -53,7 +55,7 @@ def main(
     log_prefix = 'problem_generation'+'.'
 
     os.makedirs(log_root, exist_ok=True)
-    if num_concurrency > 1:
+    if not debug:
         logger.remove()
         logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
     logger.add(osp.join(log_root, log_prefix+now+'.log'), level='DEBUG')
@@ -132,12 +134,13 @@ def main(
             result = await problem_generator.generate_async(
                 conditions=condition,
                 server=server,
-                decompose_steps=False,
+                decompose_steps=True,
+                reassemble_trajectory=True,
                 tag=str(tag_i),
                 verbose=False,
             )
             
-            logger.info(f'generate_worker({tag_i}, {condition}): generation finished: {result.formal_statement}')
+            logger.info(f'generate_worker({tag_i}, {condition}): generation finished: {result.header + NEWLINE or ""}{result.formal_statement}')
             finished[key] = result
         except Exception as e:
             logger.info(f'generate_worker({tag_i}, {condition}): generation failed due to: {repr(e)}\n{traceback.format_exc()}')

@@ -125,3 +125,10 @@ digit_to_superscript = {v: k for k, v in superscript_to_digit.items()}
 digit_to_subscript = {v: k for k, v in subscript_to_digit.items()}
 
 allowed_submission_name_prefices = ['h', 'h_']
+
+MULTILINE_COMMENT_PLACEHOLDER = '🗫'
+SINGLELINE_COMMENT_PLACEHOLDER = '🗩'
+TACTIC_BLOCK_PLACEHOLDER = '💻'
+
+MULTILINE_COMMENT_PATTERN = re.compile(r'/-(.|\n)*?-/',)
+SINGLELINE_COMMENT_PATTERN = re.compile(r'--.*')
