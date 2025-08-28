@@ -561,6 +561,9 @@ class ProblemGenerationAgent:
                 for s in steps:
                     if s.is_introducing:
                         for l in s.header.splitlines():
+                            l = l.strip()
+                            if l.endswith(' in'):
+                                l = l[:-len('in')].strip()
                             if l.startswith('open scoped'):
                                 for elem in l[len('open scoped'):].strip().split():
                                     open_scoped_set.add(elem)
