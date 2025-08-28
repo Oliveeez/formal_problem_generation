@@ -551,7 +551,7 @@ class ProblemGenerationAgent:
 
         # Validate statement and proof
         try:
-            formal_statement = '∀\n' + '\n'.join(problem_hypotheses) + '\n, ' + submission_fvar.t
+            formal_statement = (('∀\n' + '\n'.join(problem_hypotheses) + '\n, ') if len(problem_hypotheses) > 0 else '') + submission_fvar.t
             try:
                 init_validation_state = await server.load_statement_async(formal_statement, intros=[v.name for s in steps if s.is_introducing for v in s.new_contexts])
             except TacticFailure:
