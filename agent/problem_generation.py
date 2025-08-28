@@ -553,7 +553,7 @@ class ProblemGenerationAgent:
         try:
             formal_statement = (('∀\n' + '\n'.join(problem_hypotheses) + '\n, ') if len(problem_hypotheses) > 0 else '') + submission_fvar.t
             try:
-                init_validation_state = await server.load_statement_async(formal_statement, intros=[v.name for s in steps if s.is_introducing for v in s.new_contexts])
+                init_validation_state = await server.load_statement_async(formal_statement, intros=[(v.name if '✝' not in v.name else '_') for s in steps if s.is_introducing for v in s.new_contexts])
             except TacticFailure:
                 open_set = set()
                 open_scoped_set = set()
@@ -576,7 +576,7 @@ class ProblemGenerationAgent:
                     (('open scoped ' + ' '.join(open_scoped_set) + '\n') if len(open_scoped_set) > 0 else '') + \
                     (('open ' + ' '.join(open_set) + '\n') if len(open_set) > 0 else '') + \
                     '\n'.join(['set_option ' + t for t in option_set])
-                init_validation_state = await server.load_statement_async(formal_statement, intros=[v.name for s in steps if s.is_introducing for v in s.new_contexts], header=result.header)
+                init_validation_state = await server.load_statement_async(formal_statement, intros=[(v.name if '✝' not in v.name else '_') for s in steps if s.is_introducing for v in s.new_contexts], header=result.header)
             result.metainfo['is_statement_validated'] = True
         except Exception as e:
             logger.warning(f'validate_async({tag}): Statement validation failed due to {repr(e)}: {formal_statement}')
