@@ -570,8 +570,8 @@ class ProblemGenerationAgent:
                             elif l.startswith('set_option'):
                                 option_set.add(l[len('set_option'):].strip())
                 result.header = \
-                    'open scoped ' + ' '.join(open_scoped_set) + \
-                    'open ' + ' '.join(open_set) + \
+                    (('open scoped ' + ' '.join(open_scoped_set) + '\n') if len(open_scoped_set) > 0 else '') + \
+                    (('open ' + ' '.join(open_set) + '\n') if len(open_set) > 0 else '') + \
                     '\n'.join(['set_option ' + t for t in option_set])
                 init_validation_state = await server.load_statement_async(formal_statement, intros=[v.name for s in steps if s.is_introducing for v in s.new_contexts], header=result.header)
             result.metainfo['is_statement_validated'] = True
