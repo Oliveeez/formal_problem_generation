@@ -1188,7 +1188,7 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             # assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
             try:
                 raw_code = await self.generate_statement_async(conditions)
-                lines = [l for l in raw_code.strip().splitlines() if l != '']
+                lines = [l for l in raw_code.strip().splitlines() if l.strip() != '']
                 load_header = []
                 while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
                     load_header.append(lines.pop(0))
