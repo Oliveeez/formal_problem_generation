@@ -119,11 +119,14 @@ do
     port=$((port + 1))
 done
 
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
 for i_experiment in 0 1 2 3 4 5 6 7
 do
     export ASCEND_RT_VISIBLE_DEVICES=$i_experiment;
     python -m vllm.entrypoints.openai.api_server \
-        --model /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.problem_generator \
+        --model /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.problem_generator.nopack \
         --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
         --dtype bfloat16 \
         --api-key numina-lean-goedelv2_8b-fpgv2 \
@@ -136,15 +139,15 @@ done
 # Agent Run
 ulimit -s unlimited;
 python -m evaluator.fpg_problem_generation \
-    --log_root output/sft_ar_v2/Goedel-Prover-V2-8B.Numina-Lean.problem_generator \
+    --log_root output/sft_ar_v2/Goedel-Prover-V2-8B.Numina-Lean.problem_generator.nopack \
     --agent_name sft_ar_v2 \
     --base_url http://0.0.0.0:37210/v1 \
     --api_key numina-lean-goedelv2_8b-fpgv2 \
-    --model_name /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.problem_generator \
+    --model_name /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean.problem_generator.nopack \
     --n_servers 8 \
-    --num_generation_attempt 16 \
+    --num_generation_attempt 10 \
     --reassemble_trajectory True \
-    --max_search_trials 640 \
+    --max_search_trials 80 \
     --num_max_samples_per_trial 32 \
     --num_concurrency 96
 

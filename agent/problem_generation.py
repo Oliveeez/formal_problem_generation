@@ -939,11 +939,27 @@ Requirements
         """
         Parse the step from generation results
         """
-        start_pos = max(0, response.find('# Step'))
-        step_category, step_code = response[start_pos:].strip().split('\n', 1)
-        assert step_category.startswith('# Step ') and step_code.startswith('```') and step_code.endswith('```'), f'Unable to parse step: {response}'
-        step_category = ProblemGenerationStepCategory(step_category[len('# Step '):])
-        step_code = '\n'.join(step_code.splitlines()[1:-1])
+        step_category = None
+        for l in response.splitlines():
+            if 'Introduce' in l:
+                assert 'Derive' not in l and 'Submit' not in l
+                step_category = ProblemGenerationStepCategory.Introduce
+                break
+            elif 'Derive' in l:
+                assert 'Introduce' not in l and 'Submit' not in l
+                step_category = ProblemGenerationStepCategory.Derive
+                break
+            elif 'Submit' in l:
+                assert 'Derive' not in l and 'Introduce' not in l
+                step_category = ProblemGenerationStepCategory.Submit
+                break
+        assert step_category is not None
+        # start_pos = max(0, response.find('# Step'))
+        # step_category, step_code = response[start_pos:].strip().split('\n', 1)
+        # assert step_category.startswith('# Step ') and step_code.startswith('```') and step_code.endswith('```'), f'Unable to parse step: {response}'
+        # step_category = ProblemGenerationStepCategory(step_category[len('# Step '):])
+        
+        step_code = extract_code(response)
 
         if step_category == ProblemGenerationStepCategory.Derive:
             normalized_step_draft = normalize_draft(step_code)
