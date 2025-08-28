@@ -232,6 +232,41 @@ curl http://0.0.0.0:37210/v1/chat/completions \
       }'
 ```
 
+# Data Scaleup: Deductive Proving FineLeanCorups
+```shell
+# Make torch and torch_npu can find the `xxx.so` libs we installed before (https://vllm-ascend.readthedocs.io/en/v0.7.3-dev/developer_guide/performance/optimization_and_tuning.html)
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+# export PYTORCH_NPU_ALLOC_CONF="max_split_size_mb:250" # Upper limit of memory block splitting allowed (MB), Setting this parameter can prevent large memory blocks from being split.
+# export PYTORCH_NPU_ALLOC_CONF="expandable_segments:True" # When operators on the communication stream have dependencies, they all need to be ended before being released for reuse. The logic of multi-stream reuse is to release the memory on the communication stream in advance so that the computing stream can be reused.
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
+# export CPU_AFFINITY_CONF=1 # This will greatly improve the CPU bottleneck model and ensure the same performance for the NPU bottleneck model.
+for i_experiment in 0 1 2 3 4 5 6 7
+do
+    export ASCEND_RT_VISIBLE_DEVICES=$i_experiment;
+    python -m vllm.entrypoints.openai.api_server \
+        --model /sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-8B.Numina-Lean.deductive_prover.nopack \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key deductive_prover \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 \
+        --additional-config '{"ascend_scheduler_config":{}}' &
+done
+
+ulimit -s unlimited;
+python -m evaluator.fpg_deductive_proof_generation \
+    --proof_gen_base_url http://0.0.0.0:37210/v1 \
+    --proof_gen_api_key deductive_prover \
+    --proof_gen_model_name /sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-8B.Numina-Lean.deductive_prover.nopack \
+    --n_proof_gen_model 8 \
+    --working_root /home/ma-user/workspace/formal_problem_generation/data/FineLeanCorpus/raw \
+    --use_mp True \
+    --reverse_order False \
+    --n_concurrency 12
+```
 
 ## Bug
 ```lean4

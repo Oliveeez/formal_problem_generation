@@ -111,6 +111,9 @@ class Server:
 
         # List of goal states that should be garbage collected
         self.to_remove_goal_states = []
+        
+        # Avoid race condition
+        self.lock = asyncio.Lock()
 
     @classmethod
     async def create(cls,
@@ -220,29 +223,30 @@ class Server:
 
         :meta private:
         """
-        assert self.proc
-        s = json.dumps(payload, ensure_ascii=False)
-        
-        # self.proc.sendline(f"{cmd} {s}")
-        for _, chunk in chunk_list(f"{cmd} {s}\n", 1024):
-            self.proc.sendline(chunk)
-        
-        try:
-            line = await self.proc.readline_async()
+        async with self.lock:
+            assert self.proc
+            s = json.dumps(payload, ensure_ascii=False)
+            
+            # self.proc.sendline(f"{cmd} {s}")
+            for _, chunk in chunk_list(f"{cmd} {s}\n", 1024):
+                self.proc.sendline(chunk)
+            
             try:
-                obj = json.loads(line)
-                if obj.get("error") == "io":
-                    # The server is dead
-                    self._close()
-                return obj
-            except Exception as e:
-                # self.proc.sendeof()
-                remainder = await self.proc.read_async()
-                # self._close()
-                raise ServerError(f"Cannot decode: {line}\n{remainder}") from e
-        except pexpect.exceptions.TIMEOUT as exc:
-            self._close()
-            return {"error": "timeout", "message": str(exc)}
+                line = await self.proc.readline_async()
+                try:
+                    obj = json.loads(line)
+                    if obj.get("error") == "io":
+                        # The server is dead
+                        self._close()
+                    return obj
+                except Exception as e:
+                    # self.proc.sendeof()
+                    remainder = await self.proc.read_async()
+                    # self._close()
+                    raise ServerError(f"Cannot decode: {line}\n{remainder}") from e
+            except pexpect.exceptions.TIMEOUT as exc:
+                self._close()
+                return {"error": "timeout", "message": str(exc)}
 
     run = to_sync(run_async)
 

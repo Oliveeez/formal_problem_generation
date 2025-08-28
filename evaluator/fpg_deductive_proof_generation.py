@@ -21,24 +21,30 @@ from fire import Fire
 import aiofiles
 
 from common.constants import FPS_GLOBAL_SETTING, CORE_OPTIONS
-from common.utils import add_k_to_port, remove_comments, replace_sorry, decompose_statement
+from common.utils import add_k_to_port, remove_comments, decompose_statement
 from common.pantograph.dataclasses import ProblemGenerationProcess
 from common.pantograph.server import PersistentServer
 from agent.problem_generation import SFT_DeductiveProofGenerator
 
 N_CONCURRENCY_PER_WORKER = 8
+replace_sorry = lambda s: re.sub(
+    r':=\s+sorry', ':= sorry',
+        re.sub(
+    r'by\s+sorry', r'sorry',
+        s))
 
 async def async_worker(
     datapoint: Dict,
     base_cnt: int,
     idx: int,
-    agent: SFT_DeductiveProofGenerator,
-    available_parsers: List[PersistentServer],
+    available_agents: List[SFT_DeductiveProofGenerator],
+    # available_parsers: List[PersistentServer],
     available_servers: List[PersistentServer],
     results: List,
 ) -> None:
-    parser = available_parsers.pop()
-    parser.tag = str(idx)
+    agent = available_agents.pop()
+    # parser = available_parsers.pop()
+    # parser.tag = str(idx)
     server = available_servers.pop()
     server.tag = str(idx)
     time_start = time.time()
@@ -47,9 +53,9 @@ async def async_worker(
         informal_problem=datapoint['statement'],
         informal_answer='',
         informal_solution='',
-        header='',
+        header=None,
         formal_statement='',
-        formal_solution_draft='',
+        formal_solution_draft=None,
         formal_proofs=[],
         steps=[],
         dependencies=[],
@@ -57,7 +63,7 @@ async def async_worker(
         metainfo={'id' : datapoint['id']}
     )
     try:
-        # I. Parse tactic invocation
+        # I. Parse statement
         p_raw = datapoint['lean_code']
         p = remove_comments(p_raw).strip().replace('\nlemma ', '\ntheorem ').replace('\nexample ', '\ntheorem thm_example')
         start_pos = p.find('theorem')
@@ -65,7 +71,7 @@ async def async_worker(
         intro, stmt = p[:start_pos], p[start_pos:]
         
         result.formal_statement = 'example ' + replace_sorry(stmt.split(maxsplit=2)[-1].strip())
-        assert result.formal_statement.endswith(':= sorry')
+        assert result.formal_statement.endswith(':= sorry'), result.formal_statement
                 
         import_list = []
         open_scoped_list = []
@@ -120,50 +126,65 @@ async def async_worker(
                 intros.extend(var_names.strip().split(' '))
                 hypotheses.append('(' + declaration[1:-1] + ')')    # Replace '{v : T}' into '(v : T)
         
-        formal_statement_load = (('∀ ' + '\n'.join(hypotheses) + '\n, ') if len(hypotheses) > 0 else '') + target
-        init_state = await server.load_statement_async(formal_statement_load, intros=intros, header=load_header)
-        
         # Falsify
-        falsifying_state = await server.goal_tactic_async(init_state, 0, 'exfalso')
+        falsify_statement_load = (('∀ ' + '\n'.join(hypotheses) + '\n, ') if len(hypotheses) > 0 else '') + 'False'
+        try:
+            falsifying_state = await server.load_statement_async(falsify_statement_load, intros=intros, header=load_header)
+        except Exception as e:
+            raise RuntimeError(f'Falsifying statement load failed due to {repr(e)}')
         r = await agent.generate_proofs_async(falsifying_state, server)
+        
         if r is not None and len(r) == 1:
             falsified_model, falifying_proof = r[0]
+            result.formal_solution_draft = falifying_proof
+            result.metainfo['falsified_model'] = falsified_model
+            logger.opt(colors=True).info(f'<green>async_worker({base_cnt+idx}): falsified.</green>')
+        else:
+            formal_statement_load = (('∀ ' + '\n'.join(hypotheses) + '\n, ') if len(hypotheses) > 0 else '') + target
+            try:
+                init_state = await server.load_statement_async(formal_statement_load, intros=intros, header=load_header)
+            except Exception as e:
+                raise RuntimeError(f'Statement load failed due to {repr(e)}')
+            # Generate deductive proofs, decompose, and reassemble
+            proven_model = None
+            r = await agent.generate_proofs_async(init_state, server)
+            assert r is not None and len(r) == 1, 'Proof generation failed'
+            proven_model, proof = r[0]
+            result.formal_solution_draft = proof
+            result.metainfo['proven_model'] = proven_model
             
-        
-        # Generate deductive proofs, decompose, and reassemble
-        proven_model = None
-        r = await agent.generate_proofs_async(init_state, server)
-        assert r is not None and len(r) == 1
-        proven_model, proof = r[0]
-        result.formal_solution_draft = proof,
-        
-        is_decomposed = agent.decompose_deductive_steps_async(
-            result=result,
-            server=server,
-            tag=str(base_cnt+idx),
-            reassemble_trajectory=True
-        )
-        # TODO: metainfo
-        
-        result.metainfo = json.dumps(
-            result.metainfo | {
-                'time_consumption': time.time() - time_start,
-                'proven_model': proven_model
-            }
-        )
-        logger.debug(f'async_worker({base_cnt+idx}): succeeded.')
+            deductive_steps, deductive_states = await agent.decompose_deductive_steps_async(
+                result=result,
+                server=server,
+                tag=str(base_cnt+idx),
+            )
+            assert deductive_steps is not None, 'Deductive Decomposition failed'
+            is_valid = await agent.validate_deductive_steps_async(
+                result=result,
+                deductive_steps=deductive_steps,
+                deductive_states=deductive_states,
+                server=server,
+                tag=str(base_cnt+idx),
+                reassemble_trajectory=True
+            )
+            assert is_valid, 'Deductive Validation & Reassembling Failed'
+            logger.opt(colors=True).info(f'<green>async_worker({base_cnt+idx}): succeeded.</green>')
     except Exception as e:
         logger.debug(f'async_worker({base_cnt+idx}): Failed, traceback: {[traceback.format_exc()]}')
+        logger.warning(f'async_worker({base_cnt+idx}): Failed due to {repr(e)}')
         # import pdb; pdb.set_trace()
     finally:
+        result.metainfo['time_consumption'] = time.time() - time_start
+        result.metainfo = json.dumps(result.metainfo)
         results[idx] = result
-        parser.tag = ''
-        available_parsers.insert(0, parser)
+        available_agents.insert(0, agent)
+        # parser.tag = ''
+        # available_parsers.insert(0, parser)
         server.tag = ''
         available_servers.insert(0, server)
 
 def worker(args: Tuple) -> int:
-    working_root, base_cnt, proof_gen_clients, proof_gen_base_urls, proof_gen_api_keys, proof_gen_model_names, n_servers = args
+    working_root, base_cnt, proof_gen_base_url, proof_gen_api_key, proof_gen_model_name, n_proof_gen_model = args
         
     if not osp.exists(osp.join(working_root, f'raw_chunk_{base_cnt}.pkl')):
         logger.opt(colors=True).info(f'<green>worker({base_cnt}): raw pkl does not exist, exiting....</green>')
@@ -177,35 +198,30 @@ def worker(args: Tuple) -> int:
     
     finished_list = [None for _ in range(len(data_to_process))]
 
-    problem_generators = []
-    for k in range(n_servers):
-        proof_gen_clients = [
-            AsyncOpenAI(
-                base_url=add_k_to_port(proof_gen_base_url, k),
+    problem_generators = [
+        SFT_DeductiveProofGenerator(
+            proof_gen_clients=[AsyncOpenAI(
+                base_url=add_k_to_port(proof_gen_base_url, i),
                 api_key=proof_gen_api_key
-            ) for (proof_gen_base_url, proof_gen_api_key) in zip(proof_gen_base_urls, proof_gen_api_keys)
-        ]
-        problem_generators.append(SFT_DeductiveProofGenerator(
-            statements=None,    # TODO
-            proof_gen_clients=proof_gen_clients,
-            proof_gen_models=proof_gen_model_names,
+            )],
+            proof_gen_models=[proof_gen_model_name],
             num_max_samples_per_trial=1,
-            temperature=0,
+            temperature=0.0,
             max_tokens=NOT_GIVEN
-        ))
-
-    available_parsers = [
-        PersistentServer(
-            max_count=32,
-            is_state_based=False,
-            tag='',
-            _sync_init=False,
-            imports=["Mathlib", "Aesop"],
-            project_path='/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/data/MiniF2F',
-            core_options=CORE_OPTIONS,
-            timeout=300,
-        ) for _ in range(N_CONCURRENCY_PER_WORKER)
+        ) for i in range(N_CONCURRENCY_PER_WORKER)
     ]
+    # available_parsers = [
+    #     PersistentServer(
+    #         max_count=32,
+    #         is_state_based=False,
+    #         tag='',
+    #         _sync_init=False,
+    #         imports=["Mathlib", "Aesop"],
+    #         project_path='/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/data/MiniF2F',
+    #         core_options=CORE_OPTIONS,
+    #         timeout=300,
+    #     ) for _ in range(N_CONCURRENCY_PER_WORKER)
+    # ]
     available_servers = [
         PersistentServer(
             max_count=32,
@@ -237,10 +253,10 @@ def worker(args: Tuple) -> int:
                         datapoint=d,
                         base_cnt=base_cnt,
                         idx=i,
-                        available_parsers=available_parsers,
+                        available_agents=problem_generators,
+                        # available_parsers=available_parsers,
                         available_servers=available_servers,
                         results=finished_list,
-                        working_root=osp.join(working_root, 'lean'),
                     )
                 )
             )
@@ -263,12 +279,12 @@ def worker(args: Tuple) -> int:
 def load_and_split(working_root: str, reverse_order: bool):
     all_splits = set(
             [
-                int(n[len('done_chunk_'):-len('.pkl')]) for n in os.listdir(working_root) if n.startswith('done_chunk_') and n.endswith('.pkl')
+                int(n[len('raw_chunk_'):-len('.pkl')]) for n in os.listdir(working_root) if n.startswith('raw_chunk_') and n.endswith('.pkl')
             ]
         )
     done_splits = set(
             [
-                int(n[len('done_v2_chunk_'):-len('.pkl')]) for n in os.listdir(working_root) if n.startswith('done_v2_chunk_') and n.endswith('.pkl')
+                int(n[len('done_chunk_'):-len('.pkl')]) for n in os.listdir(working_root) if n.startswith('done_chunk_') and n.endswith('.pkl')
             ]
         )
     assert done_splits.issubset(all_splits)
@@ -279,9 +295,10 @@ def load_and_split(working_root: str, reverse_order: bool):
     return remaining
 
 def main(
-    proof_gen_base_urls: List[str],
-    proof_gen_api_keys: List[str],
-    proof_gen_model_names: List[str],
+    proof_gen_base_url: str,
+    proof_gen_api_key: str,
+    proof_gen_model_name: str,
+    n_proof_gen_model: int,
     working_root: str='/home/ma-user/workspace/formal_problem_generation/data/FineLeanCorpus/raw',
     use_mp: bool=True,
     reverse_order: bool=False,
@@ -292,23 +309,21 @@ def main(
     log_prefix = 'problem_generation'+'.'
 
     os.makedirs(working_root, exist_ok=True)
-    logger.remove()
-    logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
+    if use_mp:
+        logger.remove()
+        logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
     logger.add(osp.join(working_root, log_prefix+now+'.log'), level='DEBUG')
     logger.info(f'Generating deductive steps hyperparams: {saved_args}')
     
     splits = load_and_split(working_root, reverse_order)
     
-    assert len(proof_gen_base_urls) == len(proof_gen_api_keys), f'{len(proof_gen_base_urls)} != {len(proof_gen_api_keys)}'
-    assert len(proof_gen_api_keys) == len(proof_gen_model_names), f'{len(proof_gen_api_keys)} != {len(proof_gen_model_names)}'
-
     try:
         if use_mp:
             futures = []
             with mp.Pool(processes=n_concurrency, maxtasksperchild=1) as pool:
                 for base_cnt in splits:
                     futures.append((base_cnt, pool.apply_async(worker,
-                        [(working_root, base_cnt)]
+                        [(working_root, base_cnt, proof_gen_base_url, proof_gen_api_key, proof_gen_model_name, n_proof_gen_model)]
                     )))
                 pool.close()
                 pool.join()
@@ -319,9 +334,7 @@ def main(
                     logger.error(f"main(): Task {f[0]} failed with error: {repr(e)}")
         else:
             list(map(
-                    worker, [(
-                            working_root, base_cnt
-                    ) for base_cnt in splits]
+                    worker, [(working_root, base_cnt, proof_gen_base_url, proof_gen_api_key, proof_gen_model_name, n_proof_gen_model) for base_cnt in splits]
                 ))
     except Exception as e:
         traceback.print_exc()

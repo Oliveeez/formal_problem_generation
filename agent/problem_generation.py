@@ -14,7 +14,7 @@ import collections as C
 from loguru import logger
 import networkx as nx
 from openai import AsyncOpenAI, NOT_GIVEN
-from openai.types.chat.chat_completion import Choice
+from openai.types.chat.chat_completion import ChatCompletion, Choice
 from easydict import EasyDict
 import vllm
 from transformers import AutoTokenizer
@@ -33,6 +33,7 @@ class ProblemGenerationAgent:
     def __init__(self, *args, **kwargs) -> None:
         if len(args) > 0 or len(kwargs) > 0:
             logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
+        self.token_usage = C.defaultdict(int)
     
     @staticmethod
     async def decompose_deductive_steps_async(
@@ -126,7 +127,7 @@ class ProblemGenerationAgent:
 
             return deductive_steps, deductive_states
         except Exception as e:
-            logger.error(f'decompose_deductive_steps_async({tag}): failed due to {repr(e)}, traceback: {[traceback.format_exc()]}')
+            logger.warning(f'decompose_deductive_steps_async({tag}): failed due to {repr(e)}, traceback: {[traceback.format_exc()]}')
             # breakpoint()
             return None, None
     
@@ -316,7 +317,7 @@ class ProblemGenerationAgent:
             )
             return is_analyzed
         except Exception as e:
-            logger.error(f'validate_deductive_steps_async({tag}): failed due to {repr(e)}, traceback: {[traceback.format_exc()]}')
+            logger.warning(f'validate_deductive_steps_async({tag}): failed due to {repr(e)}, traceback: {[traceback.format_exc()]}')
             # breakpoint()
             return False
 
@@ -696,8 +697,12 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                         tag=tag,
                         reassemble_trajectory=reassemble_trajectory
                     )
+                    result.metainfo['prompt_tokens'] = self.token_usage['prompt_tokens']
+                    result.metainfo['completion_tokens'] = self.token_usage['completion_tokens']
                     result.metainfo['time_consumption'] = time.time() - time_start
                     result.metainfo = json.dumps(result.metainfo)
+                    self.token_usage['prompt_tokens'] = 0
+                    self.token_usage['completion_tokens'] = 0
                     return result
                 
                 # Not submitting: deducing or introducing
@@ -738,7 +743,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                 cur_problem_state = new_problem_state
         
         except Exception as e:
-            logger.error(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, fatal error```{[traceback.format_exc()]}```')
+            logger.warning(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, fatal error```{[traceback.format_exc()]}```')
 
         logger.info(f'generate_async({tag}): search finished with {i_trial} expansions.')
         await self.reset_async()
@@ -754,8 +759,14 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
             steps=steps,
             dependencies=[],
             trajectory=[(S.goals[0].variables, i) for i, S in enumerate(states)],
-            metainfo=json.dumps({'time_consumption': time.time() - time_start})
+            metainfo=json.dumps({
+                'prompt_tokens' : self.token_usage['prompt_tokens'],
+                'completion_tokens' : self.token_usage['completion_tokens'],
+                'time_consumption': time.time() - time_start
+            })
         )
+        self.token_usage['prompt_tokens'] = 0
+        self.token_usage['completion_tokens'] = 0
 
         return result
 
@@ -816,7 +827,7 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
         for _ in range(self.num_max_samples_per_trial):
             try:
                 if 'internlm' in self.gen_model_name.lower():
-                    outputs = (await self.gen_client.chat.completions.create(
+                    response: ChatCompletion  = (await self.gen_client.chat.completions.create(
                         model=self.gen_model_name,
                         messages=prompt,
                         max_tokens=(self.max_tokens if (self.max_tokens != NOT_GIVEN and self.max_tokens > 0) else NOT_GIVEN),
@@ -824,27 +835,30 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
                         temperature=self.temperature,
                         n=1,
                         stop='<|im_end|>'
-                    )).choices
+                    ))
                 else:
-                    outputs = (await self.gen_client.chat.completions.create(
+                    response: ChatCompletion = (await self.gen_client.chat.completions.create(
                         model=self.gen_model_name,
                         messages=prompt,
                         max_tokens=(self.max_tokens if (self.max_tokens != NOT_GIVEN and self.max_tokens > 0) else NOT_GIVEN),
                         stream=False,
                         temperature=self.temperature,
                         n=1,
-                    )).choices
+                    ))
             except Exception as e:
                 logger.debug(f'gen_steps_async(): Failed to generate tactics due to {repr(e)}')
                 continue
             
+            self.token_usage['completion_tokens'] += response.usage.completion_tokens
+            self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
+            
             # Neglect failed generations
-            if not outputs[0].finish_reason == 'stop':
-                logger.debug(f'gen_steps_async(): Tactic rejected due to abnormal finishing: {outputs[0].finish_reason}')
+            if not response.choices[0].finish_reason == 'stop':
+                logger.debug(f'gen_steps_async(): Tactic rejected due to abnormal finishing: {response.choices[0].finish_reason}')
                 continue
 
             try:
-                step = self.parse_step(outputs[0].message.content)
+                step = self.parse_step(response.choices[0].message.content)
                 step_code = remove_comments(step.step_code)
                 
                 if step.is_deducing:
@@ -1077,15 +1091,17 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
     
     async def generate_statement_async(self, conditions: Any) -> str:
         # Generate and parse
-        outputs = (await self.statement_gen_client.chat.completions.create(
+        response: ChatCompletion = (await self.statement_gen_client.chat.completions.create(
             model=self.statement_gen_model,
             messages=self.format_statement_gen_prompt(conditions),
             max_tokens=self.max_tokens,
             stream=False,
             temperature=self.temperature,
             n=1,
-        )).choices
-        return self.parse_statement_gen_result(outputs[0].message.content)
+        ))
+        self.token_usage['completion_tokens'] += response.usage.completion_tokens
+        self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
+        return self.parse_statement_gen_result(response.choices[0].message.content)
     
     @abstractmethod
     def format_proof_gen_prompt(self, init_state: GoalState) -> str:
@@ -1098,24 +1114,26 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
     async def generate_one_proof_async(self, init_state: GoalState, server: PersistentServer, client: AsyncOpenAI, model: str) -> Optional[str]:
         try:
             # Generate, parse, and validate one proof
-            outputs = (await client.chat.completions.create(
+            response: ChatCompletion = (await client.chat.completions.create(
                 model=model,
                 messages=self.format_proof_gen_prompt(init_state),
                 max_tokens=self.max_tokens,
                 stream=False,
                 temperature=self.temperature,
                 n=1,
-            )).choices
-            proof = self.parse_proof_gen_result(outputs[0].message.content)
+            ))
+            self.token_usage['completion_tokens'] += response.usage.completion_tokens
+            self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
+            proof = self.parse_proof_gen_result(response.choices[0].message.content)
             proof_code = remove_comments(proof)
             idents = set(proof_code.split()).union(parse_idents(proof_code))
             # No banned token allowed
             for banned_token in BANNED_TOKENS:
                 assert banned_token not in idents, f'Banned token "{banned_token}" in proof "{proof_code}"'
             # Goal should be solved
-            final_state = await server.goal_tactic_async(init_state, 0, '{\n' + proof + '\n}')
+            final_state = await server.goal_tactic_async(init_state, 0, '{\n' + proof_code + '\n}')
             assert final_state.is_solved, '!final_state.is_solved'
-            return proof_code
+            return proof
         except:
             return None
     
@@ -1241,12 +1259,16 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             logger.info(f'generate_async({tag}): generation succeeded.')
         except Exception as e:
             logger.debug(f'generate_async({tag}): generation failed due to traceback: {traceback.format_exc()}')
-            logger.error(f'generate_async({tag}): generation failed due to {repr(e)}')
+            logger.warning(f'generate_async({tag}): generation failed due to {repr(e)}')
             
         await self.reset_async()
 
+        result.metainfo['prompt_tokens'] = self.token_usage['prompt_tokens']
+        result.metainfo['completion_tokens'] = self.token_usage['completion_tokens']
         result.metainfo['time_consumption'] = time.time() - time_start
         result.metainfo = json.dumps(result.metainfo)
+        self.token_usage['prompt_tokens'] = 0
+        self.token_usage['completion_tokens'] = 0
         return result
 
 class SFT_LLMWholeProblemGenerationAgent(LLMWholeProblemGenerationAgent):
@@ -1270,6 +1292,8 @@ Requirements
         ]
 
     def parse_statement_gen_result(self, output: str) -> str:
+        if output.startswith('<think>'):
+            output = output[len('<think>'):]
         return extract_code(output)
     
     def format_proof_gen_prompt(self, init_state: GoalState) -> str:
@@ -1297,12 +1321,13 @@ Generate a deductive proof for the following Lean 4 proof state:
         ]
 
     def parse_proof_gen_result(self, output: str) -> str:
+        if output.startswith('<think>'):
+            output = output[len('<think>'):]
         return extract_code(output)
 
 class SFT_DeductiveProofGenerator(SFT_LLMWholeProblemGenerationAgent):
     def __init__(
         self,
-        statements: List[str],  # Statements to generate proof
         proof_gen_clients: List[AsyncOpenAI],
         proof_gen_models: List[str],
         *args,
@@ -1312,10 +1337,9 @@ class SFT_DeductiveProofGenerator(SFT_LLMWholeProblemGenerationAgent):
         **kwargs
     ) -> None:
         super().__init__(None, None, proof_gen_clients, proof_gen_models, *args, num_max_samples_per_trial=num_max_samples_per_trial, temperature=temperature, max_tokens=max_tokens, **kwargs)
-        self.statements = statements
         
-    async def generate_statement_async(self, conditions: int) -> str:
-        return self.statements[conditions]
+    # async def generate_statement_async(self, conditions: int) -> str:
+    #     return self.statements[conditions]
 
     async def generate_proofs_async(self, init_state: GoalState, server: PersistentServer) -> List[Tuple[str, str]]:
         for (client, model) in zip(self.proof_gen_clients, self.proof_gen_models):
