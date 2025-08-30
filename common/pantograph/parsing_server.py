@@ -29,7 +29,8 @@ PARSING_EXTRA_OPTIONS = [
     "pp.instanceTypes=true",
     "pp.coercions.types=true",
     "pp.mvars.withType=true",
-    "pp.structureInstanceTypes=true"
+    "pp.structureInstanceTypes=true",
+    "pp.mvars=false"  # display universe level metavariables e.g. `?u.22` -> '_', and auto-generated metavariables such as `?m.22` -> '?_'
 ]
 
 PARSING_PRELUDE = r'''namespace Lean.PrettyPrinter.Delaborator

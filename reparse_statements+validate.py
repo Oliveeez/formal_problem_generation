@@ -13,6 +13,7 @@ from datetime import datetime
 import traceback
 import multiprocessing as mp
 import time
+import json
 
 import dacite
 import fire
@@ -46,6 +47,9 @@ async def async_worker(
         # I. Reproduce steps on PersistentParsingServer
         try:
             # Parse `target` on PersistentParsingServer
+            result.metainfo = json.loads(result.metainfo)
+            result.metainfo['is_statement_validated'] = False
+            result.metainfo['is_solution_validated'] = False
             steps = result.steps
             cur_problem_state = await parser.load_statement_async('False')
             for i_step, cur_step in enumerate(steps):
@@ -53,13 +57,18 @@ async def async_worker(
                     assert i_step == len(steps) - 1, f'(i_step == {i_step}) != (len(steps) - 1 == {len(steps) - 1})'
                     break
                 new_problem_state = await parser.goal_tactic_async(cur_problem_state, 0, cur_step.step)
-                assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
+                assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == '(False : Prop)', str(new_problem_state)
                 cur_problem_state = new_problem_state
 
             submission_name = steps[-1].step_code[len('submit_answer '):]
             submission_fvar = [v for v in cur_problem_state.goals[0].variables if v.name == submission_name]
             assert len(submission_fvar) == 1, f'submission_name={submission_name}, cur_problem_state={[str(cur_problem_state)]}'
             submission_fvar = submission_fvar[0]
+
+            submission_fvar_pp = [v for v in result.trajectory[-1][0] if v.name == submission_name]
+            assert len(submission_fvar_pp) == 1, f'submission_name={submission_name}, new_context={[v.name for v in steps[-1].new_contexts]}'
+            submission_fvar_pp = submission_fvar_pp[0]
+            # breakpoint()
 
             # Construct statement and proof
             problem_hypotheses = []
@@ -73,8 +82,13 @@ async def async_worker(
             result.header = ''
             result.formal_statement = 'example\n' + '\n'.join(problem_hypotheses) + '\n: ' + submission_fvar.t + '\n:= sorry'
             result.formal_solution_draft = formal_solution
+            
+            assert '✝' not in submission_fvar.t, 'Submitted "✝"'
         except Exception as e:
-            logger.warning(f'async_worker({idx}): Initialization failed due to {repr(e)}')
+            if isinstance(e, AssertionError) and 'Submitted "✝"' in str(e):
+                logger.debug(f'async_worker({idx}): Initialization failed due to {repr(e)}')
+            else:
+                logger.warning(f'async_worker({idx}): Initialization failed due to {repr(e)}')
             return False
         
         # Validate statement and proof
@@ -107,16 +121,20 @@ async def async_worker(
                 init_validation_state = await server.load_statement_async(formal_statement, intros=[(v.name if '✝' not in v.name else '_') for s in steps if s.is_introducing for v in s.new_contexts], header=result.header)
             result.metainfo['is_statement_validated'] = True
         except Exception as e:
-            logger.warning(f'async_worker({idx}): Statement validation failed due to {repr(e)}: {formal_statement}')
+            if isinstance(e, TacticFailure) and 'unknown identifier' in str(e): # Bug caused by `extract_goal`
+                logger.debug(f'async_worker({idx}): Statement validation failed due to {repr(e)}: {formal_statement}, submission_fvar_pp={submission_fvar_pp}')
+            else:
+                logger.warning(f'async_worker({idx}): Statement validation failed due to {repr(e)}: {formal_statement}, submission_fvar_pp={submission_fvar_pp}')
             return
         try:
-            final_validation_state = await server.goal_tactic_async(init_validation_state, 0, '{\n' + formal_solution + '\n}')
+            final_validation_state = await server.goal_tactic_async(init_validation_state, 0, 'have h_submission := {\n' + formal_solution + '\n}\nexact h_submission')
             assert final_validation_state.is_solved, str(final_validation_state)
             result.metainfo['is_solution_validated'] = True
         except Exception as e:
-            logger.warning(f'async_worker({idx}): Solution validation failed due to {repr(e)}: {formal_solution}')
+            logger.debug(f'async_worker({idx}): Solution validation failed due to {repr(e)}: {formal_solution}')
             return
     finally:
+        result.metainfo = json.dumps(result.metainfo)
         results[idx] = result
         server.tag = ''
         available_servers.insert(0, server)
@@ -128,9 +146,11 @@ def main(
     save_path: str='/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/data/MiniF2F/Goedel-Prover-V2-8B.Numina-Lean.problem_generator.nopack/failed-revalidated.0830.pkl',
     n_concurrency: int=8
 ):
-    with open(load_path, 'wb') as f:
+    with open(load_path, 'rb') as f:
         data_to_process = pickle.load(f)
     
+    logger.remove()
+    logger.add(sys.stdout, level='INFO')
     finished_list = [None for _ in range(len(data_to_process))]
 
     available_servers = [
@@ -159,7 +179,7 @@ def main(
     ]
 
     tasks = [
-        (i, d) for (i, d) in enumerate(data_to_process) if d is not None and 'parse_result' in d.keys()
+        (i, d) for (i, d) in enumerate(data_to_process)
     ]
     logger.info(f'Initialized, loaded {len(data_to_process)} samples, processing {len(tasks)} invocation-parsed samples.')
 
