@@ -201,7 +201,7 @@ def worker(args: Tuple) -> int:
     problem_generators = [
         SFT_DeductiveProofGenerator(
             proof_gen_clients=[AsyncOpenAI(
-                base_url=add_k_to_port(proof_gen_base_url, i),
+                base_url=add_k_to_port(proof_gen_base_url, i % n_proof_gen_model),
                 api_key=proof_gen_api_key
             )],
             proof_gen_models=[proof_gen_model_name],
