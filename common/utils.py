@@ -24,7 +24,11 @@ from common.constants import allowed_submission_name_prefices, superscript_to_di
 
 
 replace_calc = lambda s: re.sub(r'by\s+calc', r'calc', s)
-replace_sorry = lambda s: re.sub(r'by\s+sorry', r'sorry', s)
+replace_sorry = lambda s: re.sub(
+    r':=\s+sorry', ':= sorry',
+        re.sub(
+    r'by\s+sorry', r'sorry',
+        s))
 
 def format_variable_sequence(s : Iterable['Variable']) -> str:
     return ' '.join([f'({v.name} : {v.t})' if v.name not in [None, '_'] else f'[{v.t}]' for v in s])
@@ -36,7 +40,7 @@ def inplace_add(s: str, ss: List[str]) -> str:
 def extract_code(s: str) -> str:
     parse_result = re.findall(CODEBLOCK_PATTERN, s)
     if len(parse_result) > 0:
-        step = parse_result[0].strip()
+        step = parse_result[-1].strip()
     else:
         split_cnt = len(re.findall('```', s))
         if split_cnt == 0:

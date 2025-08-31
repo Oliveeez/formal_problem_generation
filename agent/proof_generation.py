@@ -6,6 +6,7 @@ import collections as C
 import heapq
 import asyncio
 import traceback
+import regex as re
 
 from loguru import logger
 # logger = logger.opt(colors=True)  # Some tactics or proof states might has tokens like <...>, </...> that results in error in loguru.
@@ -15,10 +16,10 @@ from easydict import EasyDict
 import vllm
 from transformers import AutoTokenizer
 
-from common.constants import BANNED_TOKENS, API_TIMEOUT, CODEBLOCK_PATTERN
+from common.constants import BANNED_TOKENS, API_TIMEOUT, CODEBLOCK_PATTERN, CORE_OPTIONS
 from common.pantograph.server import Server, TacticFailure, ServerError
 from common.pantograph.dataclasses import TacticHave, TacticLet, Tactic, GoalState, Goal, ProofSearchState, ProofGenerationResult, ProofSearchResult
-from common.utils import zip_strict, remove_comments, normalize_spaces
+from common.utils import zip_strict, remove_comments, normalize_spaces, extract_code, replace_sorry
 
 
 class ProofGenerationAgent:
@@ -34,57 +35,6 @@ class ProofGenerationAgent:
         ignored_goals: List[Goal]=[] # Only works for goals that are not coupled w/ the first goal and are the last in the list 
     ) -> ProofGenerationResult:
         pass
-
-class LLMWholeProofGenerationAgent(ProofGenerationAgent):
-    """
-    A template agent for proof generation
-    """
-
-    @abstractmethod
-    def gen_prompt(
-        self,
-        state: GoalState,
-        conditions: Any,
-    ) -> List[Dict[str, str]]:
-        """
-        Generate a prompt for the generator
-        """
-
-    @abstractmethod
-    def parse_step(
-        self,
-        response: str
-    ) -> str:
-        """
-        Parse the step from generation results
-        """
-
-    async def search_async(self,
-        server: Server,
-        init_state: GoalState,
-        tag: str='',
-        verbose: bool=False,
-        ignored_goals: List[Goal]=[] # Only works for goals that are not coupled w/ the first goal and are the last in the list 
-    ) -> ProofGenerationResult:
-        pass
-
-class Kimina_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
-    def gen_prompt(
-        self,
-        state: GoalState,
-        conditions: Any,
-    ) -> List[Dict[str, str]]:
-        """
-        Generate a prompt for the generator
-        """
-
-    def parse_step(
-        self,
-        response: str
-    ) -> str:
-        """
-        Parse the step from generation results
-        """
 
 class ProofSearchAgent(ProofGenerationAgent):
     """
@@ -849,3 +799,207 @@ class StepProver_Critic_AVGGOAL_LLMProofSearchAgent(StepProver_NALP_AVGGOAL_LLMP
         value = response.data[0].embedding[-1]
 
         return -value
+
+class LLMWholeProofGenerationAgent(ProofGenerationAgent):
+    """
+    A template agent for proof generation
+    """
+
+    @staticmethod
+    @abstractmethod
+    def gen_prompt(
+        self,
+        state: GoalState,
+        formal_statement: Optional[str]=None,
+        conditions: Optional[Any]=None,
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
+    
+    @staticmethod
+    @abstractmethod
+    def parse_proof(
+        self,
+        response: str
+    ) -> str:
+        """
+        Parse the step from generation results
+        """
+
+    async def search_async(
+        self,
+        server: Server,
+        init_state: GoalState,
+        formal_statement: str,
+        tag: str='',
+        verbose: bool=False,
+        ignored_goals: List[Goal]=[] # Only works for goals that are not coupled w/ the first goal and are the last in the list 
+    ) -> ProofGenerationResult:
+        pass
+        
+
+class Kimina_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
+    @staticmethod
+    def gen_prompt(
+        state: GoalState,
+        formal_statement: Optional[str]=None,
+        conditions: Optional[str]=None,         # informal problem
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
+        informal_problem = conditions
+        header = ("""
+import Mathlib
+import Aesop
+
+""" + '\n'.join('set_option ' + t.replace('=', ' ') for t in CORE_OPTIONS)).strip()
+        
+        if formal_statement is None:
+            assert len(state.goals) == 1, f'state.goals={str(state)}'
+            g = state.goals[0]
+            assert all(v.v is None for v in g.variables), f'g.variables.v={[v.v for v in g.variables]}'
+            formal_statement = 'example\n' + (('\n'.join(f'({v.name or "_"} : {v.t})' for v in g.variables) + '\n') if len(g.variables) > 0 else '') + ': ' + g.target + ':= by\n'
+        else:
+            formal_statement = replace_sorry(formal_statement)
+            assert formal_statement.endswith(':= sorry')
+            formal_statement = formal_statement[:-len(':= sorry')] + ':= by\n'
+        
+        if informal_problem is not None:
+            formal_statement_with_code = f'/-- {informal_problem.strip()}-/\n' + formal_statement
+        else:
+            formal_statement_with_code = formal_statement
+        
+        prompt = "Think about and solve the following problem step by step in Lean 4."
+        if informal_problem is not None:
+            prompt += f"\n# Problem:{informal_problem.strip()}"""
+        prompt += f"\n# Formal statement:\n```lean4\n{header}\n{formal_statement_with_code}\n```\n"
+        messages = [
+            {"role": "system", "content": "You are an expert in mathematics and Lean 4."},
+            {"role": "user", "content": prompt}
+        ]
+        return messages
+
+    @staticmethod
+    def parse_proof(
+        response: str
+    ) -> str:
+        """
+        Parse the step from generation results
+        """
+        return extract_code(response)
+
+class Goedel_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
+    @staticmethod
+    def gen_prompt(
+        state: GoalState,
+        formal_statement: Optional[str]=None,
+        conditions: Optional[str]=None,         # informal problem
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
+        assert conditions is None
+        header = ("""
+import Mathlib
+import Aesop
+
+""" + '\n'.join('set_option ' + t.replace('=', ' ') for t in CORE_OPTIONS)).strip()
+        
+        if formal_statement is None:
+            assert len(state.goals) == 1, f'state.goals={str(state)}'
+            g = state.goals[0]
+            assert all(v.v is None for v in g.variables), f'g.variables.v={[v.v for v in g.variables]}'
+            formal_statement = 'example\n' + (('\n'.join(f'({v.name or "_"} : {v.t})' for v in g.variables) + '\n') if len(g.variables) > 0 else '') + ': ' + g.target + ':= by\n  sorry'.strip()
+        else:
+            formal_statement = replace_sorry(formal_statement)
+            assert formal_statement.endswith(':= sorry')
+            formal_statement = formal_statement[:-len(':= sorry')] + ':= by\n  sorry'.strip()
+        
+        prompt = f"""
+Complete the following Lean 4 code:
+
+```lean4
+{header}
+
+
+{formal_statement}```
+
+Before producing the Lean 4 code to formally prove the given theorem, provide a detailed proof plan outlining the main proof steps and strategies.
+The plan should highlight key ideas, intermediate lemmas, and proof structures that will guide the construction of the final formal proof.
+""".strip()
+
+        chat = [
+            {"role": "user", "content": prompt},
+        ]
+        return chat
+
+    @staticmethod
+    def parse_proof(
+        response: str
+    ) -> str:
+        """
+        Parse the step from generation results
+        """
+        return extract_code(response)
+
+class DeepSeek_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
+    @staticmethod
+    def gen_prompt(
+        state: GoalState,
+        formal_statement: Optional[str]=None,
+        conditions: Optional[str]=None,         # informal problem
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
+        informal_problem = conditions
+        header = ("""
+import Mathlib
+import Aesop
+
+""" + '\n'.join('set_option ' + t.replace('=', ' ') for t in CORE_OPTIONS)).strip()
+        
+        if formal_statement is None:
+            assert len(state.goals) == 1, f'state.goals={str(state)}'
+            g = state.goals[0]
+            assert all(v.v is None for v in g.variables), f'g.variables.v={[v.v for v in g.variables]}'
+            formal_statement = 'example\n' + (('\n'.join(f'({v.name or "_"} : {v.t})' for v in g.variables) + '\n') if len(g.variables) > 0 else '') + ': ' + g.target + ':= by\n  sorry'.strip()
+        else:
+            formal_statement = replace_sorry(formal_statement)
+            assert formal_statement.endswith(':= sorry')
+            formal_statement = formal_statement[:-len(':= sorry')] + ':= by\n  sorry'.strip()
+        
+        if informal_problem is not None:
+            formal_statement_with_code = f'/-- {informal_problem.strip()}-/\n' + formal_statement
+        else:
+            formal_statement_with_code = formal_statement
+        
+        prompt = f"""
+Complete the following Lean 4 code:
+
+```lean4
+{header}
+
+{formal_statement_with_code}
+```
+
+Before producing the Lean 4 code to formally prove the given theorem, provide a detailed proof plan outlining the main proof steps and strategies.
+The plan should highlight key ideas, intermediate lemmas, and proof structures that will guide the construction of the final formal proof.
+""".strip()
+
+        chat = [
+            {"role": "user", "content": prompt},
+        ]
+
+        return chat
+
+    @staticmethod
+    def parse_proof(
+        response: str
+    ) -> str:
+        """
+        Parse the step from generation results
+        """
+        return extract_code(response)
