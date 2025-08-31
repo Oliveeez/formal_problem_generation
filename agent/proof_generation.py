@@ -804,8 +804,15 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
     """
     A template agent for proof generation
     """
+    def __init__(
+        self,
+        client: AsyncOpenAI,
+        model: str
+    ) -> None:
+        super().__init__()
+        self.client = client
+        self.model = model
 
-    @staticmethod
     @abstractmethod
     def gen_prompt(
         self,
@@ -817,7 +824,6 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
         Generate a prompt for the generator
         """
     
-    @staticmethod
     @abstractmethod
     def parse_proof(
         self,
@@ -840,8 +846,8 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
         
 
 class Kimina_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
-    @staticmethod
     def gen_prompt(
+        self,
         state: GoalState,
         formal_statement: Optional[str]=None,
         conditions: Optional[str]=None,         # informal problem
@@ -881,8 +887,8 @@ import Aesop
         ]
         return messages
 
-    @staticmethod
     def parse_proof(
+        self,
         response: str
     ) -> str:
         """
@@ -891,11 +897,11 @@ import Aesop
         return extract_code(response)
 
 class Goedel_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
-    @staticmethod
     def gen_prompt(
+        self,
         state: GoalState,
         formal_statement: Optional[str]=None,
-        conditions: Optional[str]=None,         # informal problem
+        conditions: Optional[Any]=None,
     ) -> List[Dict[str, str]]:
         """
         Generate a prompt for the generator
@@ -935,8 +941,8 @@ The plan should highlight key ideas, intermediate lemmas, and proof structures t
         ]
         return chat
 
-    @staticmethod
     def parse_proof(
+        self,
         response: str
     ) -> str:
         """
@@ -945,8 +951,8 @@ The plan should highlight key ideas, intermediate lemmas, and proof structures t
         return extract_code(response)
 
 class DeepSeek_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
-    @staticmethod
     def gen_prompt(
+        self,
         state: GoalState,
         formal_statement: Optional[str]=None,
         conditions: Optional[str]=None,         # informal problem
@@ -995,11 +1001,37 @@ The plan should highlight key ideas, intermediate lemmas, and proof structures t
 
         return chat
 
-    @staticmethod
     def parse_proof(
+        self,
         response: str
     ) -> str:
         """
         Parse the step from generation results
         """
         return extract_code(response)
+
+class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
+    MODEL_STR_TO_CLS_DICT: Dict[str, LLMWholeProofGenerationAgent] = {
+        'kimina' : Kimina_LLMWholeProofGenerationAgent,
+        'goedel' : Goedel_LLMWholeProofGenerationAgent,
+        'deepseek' : DeepSeek_LLMWholeProofGenerationAgent,
+    }
+    
+    def __init__(
+        self,
+        client: AsyncOpenAI,
+        model: str
+    ) -> None:
+        super().__init__(client, model)
+        
+        model_name = self.model[:-1] if self.model.endswith('/') else self.model
+        model_name = model_name.split('/')[-1].lower()
+        for k, v in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS_DICT.items():
+            if k in model_name:
+                assert all(kk not in model_name for kk in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS_DICT.keys() if kk != k), f'Ambiguous model: {model_name}'
+                logger.debug(f'Dispatching {v.__name__} to {model_name}')
+                self.gen_prompt = v.gen_prompt
+                self.parse_proof = v.parse_proof
+                return
+        
+        assert False, f'Unable to parse model: {model_name}'
