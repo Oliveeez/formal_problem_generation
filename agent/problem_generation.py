@@ -22,7 +22,7 @@ from transformers import AutoTokenizer
 from common.constants import BANNED_TOKENS, SYSTEM_PROMPT_FPG, FALSIFY_TACTICS, BRACKET_PAIRINGS, CORE_OPTIONS
 from common.pantograph.server import PersistentServer, TacticFailure, ServerError
 from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, Goal, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
-from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft, parse_idents, decompose_statement, proof_decompose, generate_submission_name, is_deductive_transition
+from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft, parse_idents, decompose_statement, proof_decompose, generate_submission_name, is_deductive_transition, remove_spaces
 from agent.proof_generation import ProofSearchResult, ProofSearchAgent, VersatileLLMWholeProofGenerationAgent
 
 class ProblemGenerationAgent:
@@ -1423,16 +1423,24 @@ class ProblemEvaluator:
     def __init__(
         self,
         clients: List[AsyncOpenAI],
-        models: List[str]
+        models: List[str],
+        temperature: Optional[float]=1.0,
+        max_tokens: int=-1,
+        top_p: float=0.95,
+        try_num: int=1,
     ):
         assert len(clients) == len(models)
         self.provers = [
             VersatileLLMWholeProofGenerationAgent(
                 client=c,
                 model=m,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
             ) for c, m in zip(clients, models)
         ]
-        # TODO: Load balance
+        self.try_num = try_num
+        self.last_token_usage = C.defaultdict(int)
 
     async def any_prove_async(
         self,
@@ -1440,14 +1448,31 @@ class ProblemEvaluator:
         formal_statement: str,
         load_statement: str,
         intros: List[str],
-        header: str
-    ) -> str:
+        header: str,
+        tag: str='',
+    ) -> Tuple[Optional[str], Optional[str]]:
+        self.last_token_usage.clear()
         
-        
-        init_state = await server.load_statement_async(
-            statement=load_statement,
-            
-        )
+        for _ in range(self.try_num):
+            for prover in self.provers:
+                prover.token_usage.clear()
+                init_state = await server.load_statement_async(
+                    statement=load_statement,
+                    intros=intros,
+                    header=header
+                )
+                result = await prover.search_async(
+                    server=server,
+                    init_state=init_state,
+                    formal_statement=formal_statement,
+                    tag=tag,
+                )
+                for k, v in prover.token_usage.items():
+                    self.last_token_usage[k] += v
+                if result.success:
+                    assert len(result.proof) == 1 and result.proof[0][0] == 0
+                    return (prover.model, result.proof[0][-1])
+        return None, None
     
     async def all_prove_async(
         self,
@@ -1455,14 +1480,40 @@ class ProblemEvaluator:
         formal_statement: str,
         load_statement: str,
         intros: List[str],
-        header: str
-    ) -> str:
-        init_state = await server.load_statement_async()
+        header: str,
+        tag: str='',
+    ) -> Tuple[List[str], List[str]]: # [(model, proof), ...]
+        self.last_token_usage.clear()
+        models = []
+        proofs = []
+        
+        for _ in range(self.try_num):
+            for prover in self.provers:
+                prover.token_usage.clear()
+                init_state = await server.load_statement_async(
+                    statement=load_statement,
+                    intros=intros,
+                    header=header
+                )
+                result = await prover.search_async(
+                    server=server,
+                    init_state=init_state,
+                    formal_statement=formal_statement,
+                    tag=tag,
+                )
+                for k, v in prover.token_usage.items():
+                    self.last_token_usage[k] += v
+                if result.success:
+                    assert len(result.proof) == 1 and result.proof[0][0] == 0
+                    models.append(prover.model)
+                    proofs.append(proofs)
+        return models, proofs
     
     async def evaluate_async(
         self,
         server: PersistentServer,
-        result: ProblemGenerationProcess
+        result: ProblemGenerationProcess,
+        tag: str='',
     ) -> Dict:
         variables = []
         context, target = decompose_statement(result.formal_statement)
@@ -1487,8 +1538,38 @@ class ProblemEvaluator:
                     if '✝' in name:
                         name = '_'
                     variables.append((name.strip(), var_type))
-        init_state = await server.load_statement_async(
-            statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
+
+        prover, proof = await self.any_prove_async(
+            server=server,
+            formal_statement='example\n' + (('\n'.join(context) + '\n: ') if len(context) > 0 else ': ') + 'False := by\n  sorry',
+            load_statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + 'False',
             intros=[v[0] for v in variables],
-            header=result.header
+            header=result.header,
+            tag=tag
         )
+        
+        if proof is None:
+            return {
+                'falsify_prover': prover,
+                'falsify_proof': proof,
+                'completion_tokens': self.last_token_usage['completion_tokens'],
+                'prompt_tokens': self.last_token_usage['prompt_tokens'],
+            }
+        
+        provers, proofs = await self.all_prove_async(
+            server=server,
+            formal_statement='example\n' + (('\n'.join(context) + '\n: ') if len(context) > 0 else ': ') + target + ' := by\n  sorry',
+            load_statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
+            intros=[v[0] for v in variables],
+            header=result.header,
+            tag=tag
+        )
+        assert len(provers) == len(proofs)
+        
+        return {
+            'provers': provers,
+            'proofs' : proofs,
+            'KC': float('inf') if len(proofs) == 0 else min(remove_spaces(remove_comments(p)) for p in proofs),
+            'completion_tokens': self.last_token_usage['completion_tokens'],
+            'prompt_tokens': self.last_token_usage['prompt_tokens'],
+        }

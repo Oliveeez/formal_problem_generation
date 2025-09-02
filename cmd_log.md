@@ -234,6 +234,44 @@ curl http://0.0.0.0:37210/v1/chat/completions \
         "stream": false
       }'
 ```
+## Evaluation: Falsify & KC
+```shell
+MODEL_LIST=( \
+    "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
+    "/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B" \
+    "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
+)
+KEY_LIST=( \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+)
+length=${#MODEL_LIST[@]}
+
+for ((i=0; i<length; i++)); do
+    export ASCEND_RT_VISIBLE_DEVICES=$i;
+    python -m vllm.entrypoints.openai.api_server \
+        --model ${MODEL_LIST[i+1]} \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key ${KEY_LIST[i+1]} \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 &
+done
+
+
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_falsify_kc \
+    --load_path output/sft_wg/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack/problem_generation.20250828-210118.pkl \
+    --log_root output/sft_wg/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack \
+    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
+    --num_generation_attempt 10 \
+    --num_concurrency 8
+```
 
 # Data Scaleup: Deductive Proving FineLeanCorups
 ```shell

@@ -11,7 +11,7 @@ import regex as re
 from loguru import logger
 # logger = logger.opt(colors=True)  # Some tactics or proof states might has tokens like <...>, </...> that results in error in loguru.
 from openai import AsyncOpenAI, NOT_GIVEN
-from openai.types.chat.chat_completion import Choice
+from openai.types.chat.chat_completion import ChatCompletion, Choice
 from easydict import EasyDict
 import vllm
 from transformers import AutoTokenizer
@@ -807,11 +807,18 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
     def __init__(
         self,
         client: AsyncOpenAI,
-        model: str
+        model: str,
+        temperature: Optional[float]=None,
+        max_tokens: int=-1,
+        top_p: float=0.95,
     ) -> None:
         super().__init__()
         self.client = client
         self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.top_p = top_p
+        self.token_usage = C.defaultdict(int)
 
     @abstractmethod
     def gen_prompt(
@@ -838,12 +845,60 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
         server: Server,
         init_state: GoalState,
         formal_statement: str,
+        conditions: Any=None,
         tag: str='',
         verbose: bool=False,
         ignored_goals: List[Goal]=[] # Only works for goals that are not coupled w/ the first goal and are the last in the list 
     ) -> ProofGenerationResult:
-        pass
-        
+        time_start = time.time()
+        try:
+            prompt = self.gen_prompt(
+                state=init_state,
+                formal_statement=formal_statement,
+                conditions=conditions,
+            )
+            if 'internlm' in self.gen_model_name.lower():
+                response: ChatCompletion  = (await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=prompt,
+                    max_tokens=(self.max_tokens if (self.max_tokens != NOT_GIVEN and self.max_tokens > 0) else NOT_GIVEN),
+                    stream=False,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    timeout=API_TIMEOUT,
+                    n=1,
+                    stop='<|im_end|>'
+                ))
+            else:
+                response: ChatCompletion = (await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=prompt,
+                    max_tokens=(self.max_tokens if (self.max_tokens != NOT_GIVEN and self.max_tokens > 0) else NOT_GIVEN),
+                    stream=False,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    timeout=API_TIMEOUT,
+                    n=1,
+                ))
+            self.token_usage['completion_tokens'] += response.usage.completion_tokens
+            self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
+            
+            proof = self.parse_proof(response.choices[0].message.content)
+            final_state = await server.goal_tactic_async(init_state, 0, '{\n' + proof + '\n}')
+            assert final_state.is_solved, f'!final_state.is_solved: {[str(final_state)]}'
+            
+            logger.debug(f'search_async({tag}): Succeeded.')
+            return ProofGenerationResult(
+                duration=time.time() - time_start,
+                success=True,
+                proof=[(0, proof)]
+            )
+        except Exception as e:
+            logger.debug(f'search_async({tag}): Failed to generate tactics due to {repr(e)}')
+            return ProofGenerationResult(
+                duration=time.time() - time_start,
+                success=False,
+            )
 
 class Kimina_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
     def gen_prompt(
