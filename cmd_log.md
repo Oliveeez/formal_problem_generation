@@ -271,6 +271,20 @@ python -m evaluator.fpg_deductive_proof_generation \
     --n_concurrency 12
 ```
 
+```shell
+ulimit -s unlimited; python ./numina-lean.reassemble_trajectory_bugfix.py \
+    --working_root /home/ma-user/workspace/formal_problem_generation/data/Numina-Lean/deductive_transformation \
+    --use_mp True \
+    --n_concurrency 12 \
+    --reverse_order False
+
+ulimit -s unlimited; python ./fineleancorpus.reassemble_trajectory_bugfix.py \
+    --working_root /home/ma-user/workspace/formal_problem_generation/data/FineLeanCorpus/different_dones_32672 \
+    --use_mp True \
+    --n_concurrency 12 \
+    --reverse_order False
+```
+
 ## Bug
 ```lean4
 example

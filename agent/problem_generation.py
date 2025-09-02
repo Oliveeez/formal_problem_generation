@@ -23,7 +23,7 @@ from common.constants import BANNED_TOKENS, SYSTEM_PROMPT_FPG, FALSIFY_TACTICS, 
 from common.pantograph.server import PersistentServer, TacticFailure, ServerError
 from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, Goal, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
 from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft, parse_idents, decompose_statement, proof_decompose, generate_submission_name, is_deductive_transition
-from agent.proof_generation import ProofSearchResult, ProofSearchAgent
+from agent.proof_generation import ProofSearchResult, ProofSearchAgent, VersatileLLMWholeProofGenerationAgent
 
 class ProblemGenerationAgent:
     """
@@ -454,48 +454,11 @@ class ProblemGenerationAgent:
 
             # (Optional) Reassemble trajectories
             if reassemble_trajectory:
-                # Reduce transitive edges; Compute depths
-                # dependency_graph = nx.algorithms.dag.transitive_reduction(dependency_graph)
-                depth_dict = {n : 0 for n in range(len(steps))}
-                for u in nx.topological_sort(dependency_graph):
-                    for v in dependency_graph.successors(u):
-                        depth_dict[v] = max(depth_dict[v], depth_dict[u]+1)
-                
-                reassembled_trajectory = []
-                G = dependency_graph.copy()
-                deductive_state = await server.load_statement_async('False')
-                
-                # TODO: Shall we conduct backward-dfs to collect all nodes that `answer` needs?
-                # TODO: the current setting (depth-first) can encourage models to explore!
-                # TODO: Ablation on this: Graph pruning (`extract_goal`?)
-
-                while True:
-                    available_actions = sorted([n for (n, d) in G.in_degree() if d == 0], key=lambda n : (-depth_dict[n], steps[n].is_introducing))
-                    is_success = False
-                    for i, action_id in enumerate(available_actions):   # If fail, fall back to other available actions
-                        try:
-                            chosen_action = steps[action_id]
-                            if chosen_action.is_submitting:
-                                submission_fvar_re = [v for v in deductive_state.goals[0].variables if v.name == submission_name]
-                                assert len(submission_fvar_re) == 1, f'submission_name={submission_name}, deductive_state={deductive_state}'
-                                submission_fvar_re = submission_fvar_re[0]
-                                assert submission_fvar_re.t == submission_fvar.t, f'submission_fvar_re.t != submission_fvar.t: {submission_fvar_re.t} != {submission_fvar.t}'
-                                reassembled_trajectory.append((deductive_state.goals[0].variables, action_id))
-                                if not set(deductive_state.goals[0].variables).issubset(set(states[-1].goals[0].variables)):
-                                    logger.warning(f'analyze_async({tag}): ¬(deductive_state ⊆ states[-1]): {[str(deductive_state.goals[0])], str(states[-1].goals[0])}')
-                                result.metainfo['original_trajectory'] = [([v.serialize() for v in S], i_s) for (S, i_s) in result.trajectory]
-                                result.trajectory = reassembled_trajectory
-                                return True
-                            new_deductive_state = await server.goal_tactic_async(deductive_state, 0, chosen_action.step)
-                            reassembled_trajectory.append((deductive_state.goals[0].variables, action_id))
-                            is_success = True
-                            G.remove_node(action_id)
-                            deductive_state = new_deductive_state
-                        except Exception as e:
-                            # breakpoint()
-                            logger.debug(f'analyze_async({tag}): [{i}/{len(available_actions)}] available actions failed due to {repr(e)}')
-                    if not is_success:
-                        raise RuntimeError('All available actions failed.')
+                return (await ProblemGenerationAgent.reassemble_trajectory_async(
+                    result=result,
+                    server=server,
+                    tag=tag
+                ))
                 
         except Exception as e:
             logger.warning(f'analyze_async({tag}): Failed due to {repr(e)}')
@@ -517,6 +480,89 @@ class ProblemGenerationAgent:
             return False
         
         return True
+    
+    @staticmethod
+    async def reassemble_trajectory_async(
+        result: ProblemGenerationProcess,
+        server: PersistentServer,
+        tag: str='',
+    ) -> bool:
+        try:
+            assert len(result.dependencies) > 0, 'Should analyze dependency first.'
+            dependency_graph = nx.DiGraph()
+            dependency_graph.add_edges_from(result.dependencies)
+            
+            steps = result.steps
+            assert steps[-1].is_submitting and steps[-1].step_code.startswith('submit_answer ')
+            submission_name = steps[-1].step_code[len('submit_answer '):]
+            
+            submission_fvar = [v for v in result.trajectory[-1][0] if v.name == submission_name]
+            assert len(submission_fvar) == 1, f'submission_name={submission_name}, new_context={[v.name for v in steps[-1].new_contexts]}'
+            submission_fvar = submission_fvar[0]
+                        
+            # Reduce transitive edges; Compute depths
+            # dependency_graph = nx.algorithms.dag.transitive_reduction(dependency_graph)
+            depth_dict = {n : 0 for n in range(len(steps))}
+            for u in nx.topological_sort(dependency_graph):
+                for v in dependency_graph.successors(u):
+                    depth_dict[v] = max(depth_dict[v], depth_dict[u]+1)
+            
+            reassembled_trajectory = []
+            G = dependency_graph.copy()
+            deductive_state = await server.load_statement_async('False')
+            
+            # TODO: Shall we conduct backward-dfs to collect all nodes that `answer` needs?
+            # TODO: the current setting (depth-first) can encourage models to explore!
+            # TODO: Ablation on this: Graph pruning (`extract_goal`?)
+
+            while True:
+                available_actions = sorted([n for (n, d) in G.in_degree() if d == 0], key=lambda n : (-depth_dict[n], steps[n].is_introducing))
+                is_success = False
+                for i, action_id in enumerate(available_actions):   # If fail, fall back to other available actions
+                    try:
+                        chosen_action = steps[action_id]
+                        if chosen_action.is_submitting:
+                            submission_fvar_re = [v for v in deductive_state.goals[0].variables if v.name == submission_name]
+                            assert len(submission_fvar_re) == 1, f'submission_name={submission_name}, deductive_state={deductive_state}'
+                            submission_fvar_re = submission_fvar_re[0]
+                            assert submission_fvar_re.t == submission_fvar.t, f'submission_fvar_re.t != submission_fvar.t: {submission_fvar_re.t} != {submission_fvar.t}'
+                            reassembled_trajectory.append((deductive_state.goals[0].variables, action_id))
+                            if not set(deductive_state.goals[0].variables).issubset(set(result.trajectory[-1][0])):
+                                logger.warning(f'reassemble_trajectory_async({tag}): ¬(deductive_state ⊆ states[-1]): {[str(deductive_state.goals[0])], str(result.trajectory[-1][0])}')
+                            result.metainfo['original_trajectory'] = [([v.serialize() for v in S], i_s) for (S, i_s) in result.trajectory]
+                            result.trajectory = reassembled_trajectory
+                            return True
+                        new_deductive_state = await server.goal_tactic_async(deductive_state, 0, chosen_action.step)
+                        reassembled_trajectory.append((deductive_state.goals[0].variables, action_id))
+                        is_success = True
+                        G.remove_node(action_id)
+                        deductive_state = new_deductive_state
+                        break
+                    except Exception as e:
+                        # breakpoint()
+                        logger.debug(f'reassemble_trajectory_async({tag}): [{i}/{len(available_actions)}] available actions failed due to {repr(e)}')
+                if not is_success:
+                    raise RuntimeError('All available actions failed.')
+            
+            # TODO?: Validate reassembled trajectory
+        except Exception as e:
+            logger.warning(f'reassemble_trajectory_async({tag}): Failed due to {repr(e)}')
+            # breakpoint()
+            logger.debug(f'reassemble_trajectory_async({tag}): Failed traceback {[traceback.format_exc()]}')
+            # # reduced_dependency_graph = nx.algorithms.dag.transitive_reduction(dependency_graph)
+            # import matplotlib.pyplot as plt
+            # plt.figure(figsize=(24, 16))
+            # pos = nx.nx_agraph.graphviz_layout(dependency_graph, prog="dot", args="")
+            # color_map = ['orange' if steps[int(node)].is_submitting else 'cyan' if steps[int(node)].is_deducing else 'green' for node in dependency_graph.nodes]
+            # labels = {n: f'{depth_dict[n]}' + '\n' + '\n'.join(str(v) for v in (steps[n].new_contexts or [steps[n].step])) for n in dependency_graph.nodes}
+            # # labels = {node: '\n'.join(str(v) for v in (steps[int(node)].new_contexts or [steps[int(node)].step])) for node in reduced_dependency_graph.nodes}
+            # # order_dict = {n : i for i, (s, n) in enumerate(reassembled_trajectory)}
+            # # labels = {n: f'{order_dict.get(n, "∞")}, {depth_dict[n]}' + '\n' + '\n'.join(str(v) for v in (steps[n].new_contexts or [steps[n].step])) for n in dependency_graph.nodes}
+            # nx.draw(dependency_graph, pos, with_labels=True, labels=labels, node_size=800, font_size=6, node_color=color_map)
+            # plt.tight_layout()
+            # plt.savefig(f'/home/ma-user/workspace/formal_problem_generation/formal_problem_generation/direct_dependency_graph.pdf')
+            # import ipdb; ipdb.set_trace()
+            return False
     
     @staticmethod
     async def validate_async(
@@ -1371,3 +1417,78 @@ class SFT_DeductiveProofGenerator(SFT_LLMWholeProblemGenerationAgent):
             if proof is not None:
                 return [(model, proof)]
         return None
+
+
+class ProblemEvaluator:
+    def __init__(
+        self,
+        clients: List[AsyncOpenAI],
+        models: List[str]
+    ):
+        assert len(clients) == len(models)
+        self.provers = [
+            VersatileLLMWholeProofGenerationAgent(
+                client=c,
+                model=m,
+            ) for c, m in zip(clients, models)
+        ]
+        # TODO: Load balance
+
+    async def any_prove_async(
+        self,
+        server: PersistentServer,
+        formal_statement: str,
+        load_statement: str,
+        intros: List[str],
+        header: str
+    ) -> str:
+        
+        
+        init_state = await server.load_statement_async(
+            statement=load_statement,
+            
+        )
+    
+    async def all_prove_async(
+        self,
+        server: PersistentServer,
+        formal_statement: str,
+        load_statement: str,
+        intros: List[str],
+        header: str
+    ) -> str:
+        init_state = await server.load_statement_async()
+    
+    async def evaluate_async(
+        self,
+        server: PersistentServer,
+        result: ProblemGenerationProcess
+    ) -> Dict:
+        variables = []
+        context, target = decompose_statement(result.formal_statement)
+        for declaration in context:
+            if declaration[0] == '[':
+                try:
+                    var_names, var_type = declaration[1:-1].split(':', 1)
+                except ValueError:
+                    var_names = '_'
+                    var_type = declaration[1:-1]
+                for name in var_names.strip().split():
+                    # print(name, var_type)
+                    variables.append((name.strip(), var_type))
+            else:
+                assert '✝' not in declaration, f'declaration: {declaration}'
+                try:
+                    var_names, var_type = declaration[1:-1].split(':', 1)
+                except ValueError:
+                    var_names = declaration[1:-1]
+                    var_type = None
+                for name in var_names.strip().split():
+                    if '✝' in name:
+                        name = '_'
+                    variables.append((name.strip(), var_type))
+        init_state = await server.load_statement_async(
+            statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
+            intros=[v[0] for v in variables],
+            header=result.header
+        )
