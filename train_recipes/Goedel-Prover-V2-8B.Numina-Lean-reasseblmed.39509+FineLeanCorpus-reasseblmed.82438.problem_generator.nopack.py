@@ -22,13 +22,14 @@ from xtuner.utils import PROMPT_TEMPLATE, SYSTEM_TEMPLATE
 #                          PART 1  Settings                           #
 #######################################################################
 # Model
-pretrained_model_name_or_path = '/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B'
+pretrained_model_name_or_path = '/cache/ckpts/Goedel-Prover-V2-8B'
 use_varlen_attn = False
 
 # Data
 # Filter: Re-execute using same environment settting w/ eval; filter out tactics with banned tactics; filter out dummy tactics (state_before == state_after)
 data_path = [
-    '/home/ma-user/workspace/formal_problem_generation/data/Numina-Lean/problem_generation_steps.reasseblmed.39509.jsonl'
+    '/cache/data/problem_generation_steps.reasseblmed.39509.jsonl',
+    '/cache/data/problem_generation_steps.reasseblmed.82438.jsonl',
 ]
 prompt_template = PROMPT_TEMPLATE.default
 max_length = 8192

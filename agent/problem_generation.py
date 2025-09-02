@@ -1098,7 +1098,7 @@ Requirements
 1. Flavoured {problem_type} and suitable for posting on forums about {source}.
 2. Fully formal Lean 4 code (inline comments in natural language are fine for planning and reasoning). Assume `import Mathlib`.
 
-# Intorduced Variables/Hypotheses
+# Introduced Variables/Hypotheses
 ```lean4
 {introduced_fvars}
 ```
