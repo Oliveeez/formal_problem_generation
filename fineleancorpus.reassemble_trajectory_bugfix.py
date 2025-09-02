@@ -83,7 +83,7 @@ async def async_worker(
             logger.debug(f'async_worker({base_cnt+idx}): succeeded.')
         except Exception as e:
             logger.warning(f'async_worker({base_cnt+idx}): Failed: {traceback.format_exc()}')
-            import ipdb; ipdb.set_trace()
+            # import ipdb; ipdb.set_trace()
             logger.debug(f'async_worker({base_cnt+idx}): Failed, traceback: {[traceback.format_exc()]}')
         
     finally:
