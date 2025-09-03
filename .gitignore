@@ -5,6 +5,7 @@ common/pantograph/pantograph-repl
 # Project
 data/MiniF2F/
 output/
+work_dirs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -19,7 +19,7 @@ from transformers import AutoTokenizer
 from common.constants import BANNED_TOKENS, API_TIMEOUT, CODEBLOCK_PATTERN, CORE_OPTIONS
 from common.pantograph.server import Server, TacticFailure, ServerError
 from common.pantograph.dataclasses import TacticHave, TacticLet, Tactic, GoalState, Goal, ProofSearchState, ProofGenerationResult, ProofSearchResult
-from common.utils import zip_strict, remove_comments, normalize_spaces, extract_code, replace_sorry
+from common.utils import zip_strict, remove_comments, normalize_spaces, extract_code, replace_sorry, parse_idents
 
 
 class ProofGenerationAgent:
@@ -857,7 +857,7 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
                 formal_statement=formal_statement,
                 conditions=conditions,
             )
-            if 'internlm' in self.gen_model_name.lower():
+            if 'internlm' in self.model.lower():
                 response: ChatCompletion  = (await self.client.chat.completions.create(
                     model=self.model,
                     messages=prompt,
@@ -884,6 +884,9 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
             self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
             
             proof = self.parse_proof(response.choices[0].message.content)
+            idents = set(remove_comments(proof).split()).union(parse_idents(remove_comments(proof)))
+            for banned_token in BANNED_TOKENS:
+                assert banned_token not in idents, f'Banned token "{banned_token}" in proof'
             final_state = await server.goal_tactic_async(init_state, 0, '{\n' + proof + '\n}')
             assert final_state.is_solved, f'!final_state.is_solved: {[str(final_state)]}'
             
@@ -949,7 +952,7 @@ import Aesop
         """
         Parse the step from generation results
         """
-        return extract_code(response)
+        return extract_code(response).split(':= by', maxsplit=1)[-1]
 
 class Goedel_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
     def gen_prompt(
@@ -1003,7 +1006,7 @@ The plan should highlight key ideas, intermediate lemmas, and proof structures t
         """
         Parse the step from generation results
         """
-        return extract_code(response)
+        return extract_code(response).split(':= by', maxsplit=1)[-1]
 
 class DeepSeek_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
     def gen_prompt(
@@ -1063,7 +1066,7 @@ The plan should highlight key ideas, intermediate lemmas, and proof structures t
         """
         Parse the step from generation results
         """
-        return extract_code(response)
+        return extract_code(response).split(':= by', maxsplit=1)[-1]
 
 class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
     MODEL_STR_TO_CLS_DICT: Dict[str, LLMWholeProofGenerationAgent] = {
@@ -1075,9 +1078,12 @@ class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
     def __init__(
         self,
         client: AsyncOpenAI,
-        model: str
+        model: str,
+        temperature: Optional[float]=None,
+        max_tokens: int=-1,
+        top_p: float=0.95,
     ) -> None:
-        super().__init__(client, model)
+        super().__init__(client, model, temperature, max_tokens, top_p)
         
         model_name = self.model[:-1] if self.model.endswith('/') else self.model
         model_name = model_name.split('/')[-1].lower()
@@ -1085,8 +1091,8 @@ class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
             if k in model_name:
                 assert all(kk not in model_name for kk in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS_DICT.keys() if kk != k), f'Ambiguous model: {model_name}'
                 logger.debug(f'Dispatching {v.__name__} to {model_name}')
-                self.gen_prompt = v.gen_prompt
-                self.parse_proof = v.parse_proof
+                self.gen_prompt = v(None, None).gen_prompt
+                self.parse_proof = v(None, None).parse_proof
                 return
         
         assert False, f'Unable to parse model: {model_name}'

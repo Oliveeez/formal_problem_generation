@@ -709,7 +709,7 @@ def normalize_draft(s: str) -> str:
     s_filled = re.sub(r'have\s+:', r'have this :', s_normalized)
     return '\n'.join(l for l in s_filled.splitlines() if l.strip() != '')
 
-def decompose_statement(s : str) -> Tuple[str, str]:
+def decompose_statement(s : str) -> Tuple[List[str], str]:
     s = s.strip()
     target_split = None
     if s.startswith('∀'):
@@ -968,14 +968,14 @@ def generate_submission_name(name_list: List[str]) -> str:
                     
     if not numbers_existing:
         numbers_existing = C.defaultdict(list, {
-            -1: [('h', 'text')]
+            -2: [('h', 'text')]
         })
     # Generate new name
     max_number = sorted(numbers_existing.keys())[-1]
     number_chosen = max_number + 1
     prefix, format_type = random.choice(numbers_existing[max_number])
     
-    if number_chosen == 0:
+    if number_chosen == -1:
         formatted_num = ''
     else:
         num_str = str(number_chosen)

@@ -6,7 +6,7 @@ import collections as C
 import itertools as I
 import random
 import pickle
-from typing import List, Dict, Set, Tuple, Callable
+from typing import List, Dict, Set, Tuple, Callable, Any
 import asyncio
 import regex as re
 from datetime import datetime
@@ -33,31 +33,52 @@ from common.pantograph.server import Server, PersistentServer, TacticFailure, Se
 from common.pantograph.parsing_server import PersistentParsingServer
 from agent.problem_generation import ProblemEvaluator
 
+def rotate(*lists):
+    assert lists
+    
+    length = len(lists[0])
+    for lst in lists:
+        assert len(lst) == length
+    
+    if length == 0:
+        return []
+    
+    current_lists = [lst.copy() for lst in lists]
+    
+    for _ in range(length):
+        next_lists = [lst[-1:] + lst[:-1] for lst in current_lists]
+        current_lists = next_lists
+        yield tuple(current_lists)
+
+
 async def async_worker(
     result: ProblemGenerationProcess,
-    idx: int,
+    key: Any,
     agent: ProblemEvaluator,
     available_servers: List[PersistentServer],
-    results: List,
+    finished_dict: Dict,
 ) -> None:
     server = available_servers.pop()
-    server.tag = str(idx)
+    server.tag = str(key)
     try:
         result.metainfo = result.metainfo if isinstance(result.metainfo, Dict) else json.loads(result.metainfo)
         eval_result = await agent.evaluate_async(
             server=server,
             result=result,
-            tag=str(idx)
+            tag=str(key)
         )
+        if 'falsify_provers' in eval_result:
+            logger.info(f'async_worker({key}): Falsified by {eval_result["falsify_provers"][-1]}')
+        else:
+            logger.info(f'async_worker({key}): Estimated KC = {eval_result["KC"]}')
         result.metainfo['eval_result'] = eval_result
         result.metainfo = json.dumps(result.metainfo)
     except Exception as e:
-        logger.debug(f'async_worker({idx}): failed due to traceback {traceback.format_exc()}')
-        logger.warning(f'async_worker({idx}): failed due to exception {repr(e)}')
-        return
+        logger.debug(f'async_worker({key}): failed due to traceback {traceback.format_exc()}')
+        logger.warning(f'async_worker({key}): failed due to exception {repr(e)}')
     finally:
         result.metainfo = json.dumps(result.metainfo)
-        results[idx] = result
+        finished_dict[key] = result
         server.tag = ''
         available_servers.insert(0, server)
 
@@ -71,16 +92,17 @@ def main(
     temperature: float=1.0,
     max_tokens: int=-1,
     top_p: float=0.95,
-    try_num: int=8,
+    try_num: int=4,
     num_concurrency: int=12,
+    debug: bool=False,
 ):
     saved_args = {**locals()}
     
     now = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_prefix = 'evaluate_falsify_kc'+'.'
+    log_prefix = 'fpg_evaluate_falsify_prove'+'.'
 
     os.makedirs(log_root, exist_ok=True)
-    if num_concurrency > 1:
+    if not debug:
         logger.remove()
         logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
     logger.add(osp.join(log_root, log_prefix+now+'.log'), level='DEBUG')
@@ -91,8 +113,6 @@ def main(
     with open(load_path, 'rb') as f:
         data_to_process = pickle.load(f)
     
-    finished_list = [None for _ in range(len(data_to_process))]
-
     available_servers = [
         PersistentServer(
             max_count=64,
@@ -111,23 +131,28 @@ def main(
             api_key=proof_gen_api_key
         ) for (proof_gen_base_url, proof_gen_api_key) in zip(proof_gen_base_urls, proof_gen_api_keys)
     ]
-    agent = ProblemEvaluator(
-        clients=proof_gen_clients,
-        models=proof_gen_model_names,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        top_p=top_p,
-        try_num=try_num,
-    )
+    
+    agents = [
+        ProblemEvaluator(
+            clients=clients,
+            models=models,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            try_num=try_num,
+            kc_early_stop=True,
+        ) for clients, models in rotate(proof_gen_clients, proof_gen_model_names)
+    ]
 
     tasks = [
-        (i, d) for (i, d) in enumerate(data_to_process)
+        (condition, sample) for (condition, sample) in data_to_process.items() if len(sample.formal_statement or '') > 0
     ]
-    logger.info(f'Evaluating {len(data_to_process)} samples.')
+    finished_dict = {condition : None for condition in data_to_process.keys()}
+    logger.info(f'Evaluating {len(tasks)} samples.')
 
     async def _async_main():
         pending_tasks = set()
-        for i, d in tasks:
+        for i, (condition, sample) in enumerate(tasks):
             if len(pending_tasks) >= num_concurrency:
                 done_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in done_tasks:
@@ -139,11 +164,11 @@ def main(
             pending_tasks.add(
                 asyncio.create_task(
                     async_worker(
-                        result=d,
-                        idx=i,
-                        agent=agent,
+                        result=sample,
+                        key=condition,
+                        agent=agents[i % len(agents)],
                         available_servers=available_servers,
-                        results=finished_list,
+                        finished_dict=finished_dict,
                     )
                 )
             )
@@ -160,7 +185,7 @@ def main(
         try:
             logger.info(f"Finished generation, saving at {osp.join(log_root, log_prefix+now+'.(pkl|jsonl)')}")
             with open(osp.join(log_root, log_prefix+now+'.pkl'), 'wb') as f:
-                pickle.dump(finished_list, f)
+                pickle.dump(finished_dict, f)
         except Exception as e:
             logger.error(traceback.format_exc())
             import pdb; pdb.set_trace()
