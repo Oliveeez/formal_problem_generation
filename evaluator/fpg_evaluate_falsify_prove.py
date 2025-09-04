@@ -94,6 +94,7 @@ def main(
     top_p: float=0.95,
     try_num: int=4,
     num_concurrency: int=12,
+    kc_estimation_mode: str='none',
     debug: bool=False,
 ):
     saved_args = {**locals()}
@@ -109,6 +110,7 @@ def main(
     logger.info(f'Evaluating problem generator with hyperparams: {saved_args}')
     assert len(proof_gen_base_urls) == len(proof_gen_api_keys), f'{len(proof_gen_base_urls)} != {len(proof_gen_api_keys)}'
     assert len(proof_gen_api_keys) == len(proof_gen_model_names), f'{len(proof_gen_api_keys)} != {len(proof_gen_model_names)}'
+    assert kc_estimation_mode.lower() in ['none', 'early_stop', 'full'], f'kc_estimation_mode={kc_estimation_mode}'
     
     with open(load_path, 'rb') as f:
         data_to_process = pickle.load(f)
@@ -140,7 +142,7 @@ def main(
             max_tokens=max_tokens,
             top_p=top_p,
             try_num=try_num,
-            kc_early_stop=True,
+            kc_estimation_mode=kc_estimation_mode,
         ) for clients, models in rotate(proof_gen_clients, proof_gen_model_names)
     ]
 

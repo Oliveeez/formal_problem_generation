@@ -1428,9 +1428,10 @@ class ProblemEvaluator:
         max_tokens: int=-1,
         top_p: float=0.95,
         try_num: int=1,
-        kc_early_stop: bool=False,  # To compute KC@1
+        kc_estimation_mode: str='full',  # To compute KC@1
     ):
-        assert len(clients) == len(models)
+        assert len(clients) == len(models), f'len(clients)={len(clients)}, len(models)={len(models)}'
+        assert kc_estimation_mode.lower() in ['none', 'early_stop', 'full'], f'kc_estimation_mode={kc_estimation_mode}'
         self.provers = [
             VersatileLLMWholeProofGenerationAgent(
                 client=c,
@@ -1441,7 +1442,7 @@ class ProblemEvaluator:
             ) for c, m in zip(clients, models)
         ]
         self.try_num = try_num
-        self.kc_early_stop = kc_early_stop
+        self.kc_estimation_mode = kc_estimation_mode.lower()
         self.last_token_usage = C.defaultdict(int)
     
     async def prove_async(
@@ -1538,21 +1539,29 @@ class ProblemEvaluator:
                 'prompt_tokens': self.last_token_usage['prompt_tokens'],
             }
         
-        provers, proofs = await self.prove_async(
-            server=server,
-            formal_statement='example\n' + (('\n'.join(context) + '\n: ') if len(context) > 0 else ': ') + target + ' := by\n  sorry',
-            load_statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
-            intros=[v[0] for v in variables],
-            header=result.header,
-            early_stop=self.kc_early_stop,
-            tag=tag
-        )
-        assert len(provers) == len(proofs)
-        
-        return {
-            'provers': provers,
-            'proofs' : proofs,
-            'KC': min([len(remove_spaces(remove_comments(p))) for p in proofs if p is not None] + [float('inf')]),
-            'completion_tokens': self.last_token_usage['completion_tokens'],
-            'prompt_tokens': self.last_token_usage['prompt_tokens'],
-        }
+        if self.kc_estimation_mode != 'none':
+            provers, proofs = await self.prove_async(
+                server=server,
+                formal_statement='example\n' + (('\n'.join(context) + '\n: ') if len(context) > 0 else ': ') + target + ' := by\n  sorry',
+                load_statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
+                intros=[v[0] for v in variables],
+                header=result.header,
+                early_stop=(self.kc_estimation_mode != 'full'),
+                tag=tag
+            )
+            assert len(provers) == len(proofs)
+            
+            return {
+                'provers': provers,
+                'proofs' : proofs,
+                'KC': min([len(remove_spaces(remove_comments(p))) for p in proofs if p is not None] + [float('inf')]),
+                'completion_tokens': self.last_token_usage['completion_tokens'],
+                'prompt_tokens': self.last_token_usage['prompt_tokens'],
+            }
+        else:
+            return {
+                'falsify_provers': provers,
+                'falsify_proofs': proofs,
+                'completion_tokens': self.last_token_usage['completion_tokens'],
+                'prompt_tokens': self.last_token_usage['prompt_tokens'],
+            }

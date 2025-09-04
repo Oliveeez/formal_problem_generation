@@ -236,18 +236,18 @@ curl http://0.0.0.0:37210/v1/chat/completions \
 ```
 ## Evaluation: Falsify & KC
 ```shell
-export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so"
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
 ldd `which python`
-export TASK_QUEUE_ENABLE=2
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
 MODEL_LIST=( \
     "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
     "/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B" \
     "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
 )
 KEY_LIST=( \
-    "deductive_prover" \
-    "deductive_prover" \
-    "deductive_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
 )
 length=${#MODEL_LIST[@]}
 
@@ -266,13 +266,13 @@ done
 
 
 ulimit -s unlimited;
-python -m evaluator.fpg_evaluate_falsify_kc \
+python -m evaluator.fpg_evaluate_falsify_prove \
     --load_path output/sft_wg/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack/problem_generation.20250828-210118.pkl \
     --log_root output/sft_wg/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack \
     --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1']" \
-    --proof_gen_api_keys "['deductive_prover','deductive_prover','deductive_prover']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover']" \
     --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
-    --num_concurrency 1
+    --num_concurrency 48 --kc_estimation_mode none --try_num 4
 ```
 
 # Data Scaleup: Deductive Proving FineLeanCorups
