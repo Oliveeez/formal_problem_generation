@@ -67,10 +67,11 @@ async def async_worker(
             result=result,
             tag=str(key)
         )
-        if 'falsify_provers' in eval_result:
+        if any([p is not None for p in eval_result.get('falsify_proofs', [])]):
+            assert eval_result['falsify_proofs'][-1] is not None, 'Unexpected behavior'
             logger.info(f'async_worker({key}): Falsified by {eval_result["falsify_provers"][-1]}')
         else:
-            logger.info(f'async_worker({key}): Estimated KC = {eval_result["KC"]}')
+            logger.info(f'async_worker({key}): Estimated KC = {eval_result.get("KC", float("inf"))}')
         result.metainfo['eval_result'] = eval_result
         result.metainfo = json.dumps(result.metainfo)
     except Exception as e:
