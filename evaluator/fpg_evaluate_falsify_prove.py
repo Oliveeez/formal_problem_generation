@@ -73,6 +73,7 @@ async def async_worker(
             logger.info(f'async_worker({key}): Estimated KC = {eval_result["KC"]}')
         result.metainfo['eval_result'] = eval_result
         result.metainfo = json.dumps(result.metainfo)
+        logger.info(f'async_worker({key}): finished.')
     except Exception as e:
         logger.debug(f'async_worker({key}): failed due to traceback {traceback.format_exc()}')
         logger.warning(f'async_worker({key}): failed due to exception {repr(e)}')
