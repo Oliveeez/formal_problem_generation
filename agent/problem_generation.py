@@ -1565,3 +1565,54 @@ class ProblemEvaluator:
                 'completion_tokens': self.last_token_usage['completion_tokens'],
                 'prompt_tokens': self.last_token_usage['prompt_tokens'],
             }
+
+class AutoformalizedProblemGenerationAgent(LLMWholeProblemGenerationAgent):
+    def __init__(
+        self,
+        autoformalization_client: AsyncOpenAI,
+        autoformalization_model: str,
+        proof_gen_clients: List[AsyncOpenAI],
+        proof_gen_models: List[str],
+        formal_statement_pool: List[str],
+        *args,
+        num_max_samples_per_trial: int=1,
+        temperature: Optional[float]=None,
+        max_tokens: int=NOT_GIVEN,
+        **kwargs
+    ) -> None:
+        super().__init__()
+        if len(args) > 0 or len(kwargs) > 0:
+            logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
+        
+        assert len(proof_gen_clients) > 0 and len(proof_gen_clients) == len(proof_gen_models)
+        
+        self.autoformalization_client = autoformalization_client
+        self.autoformalization_model = autoformalization_model
+        self.proof_gen_clients = proof_gen_clients
+        self.proof_gen_models = proof_gen_models
+        self.num_max_samples_per_trial = num_max_samples_per_trial
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+
+    @abstractmethod
+    def format_autoformalization_prompt(self, condition: Any) -> str:
+        pass
+
+    @abstractmethod
+    def parse_autoformalization_result(self, output: str) -> str:
+        pass
+    
+    async def generate_statement_async(self, conditions: Any) -> str:
+        # Generate and parse
+        response: ChatCompletion = (await self.statement_gen_client.chat.completions.create(
+            model=self.statement_gen_model,
+            messages=self.format_statement_gen_prompt(conditions),
+            max_tokens=self.max_tokens,
+            stream=False,
+            temperature=self.temperature,
+            n=1,
+        ))
+        self.token_usage['completion_tokens'] += response.usage.completion_tokens
+        self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
+        return self.parse_statement_gen_result(response.choices[0].message.content)
+    

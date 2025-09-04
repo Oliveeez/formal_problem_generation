@@ -234,6 +234,25 @@ curl http://0.0.0.0:37210/v1/chat/completions \
         "stream": false
       }'
 ```
+## Baseline - Autoformalization-based Problem Generation
+```shell
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so"
+ldd `which python`
+export TASK_QUEUE_ENABLE=2
+
+export ASCEND_RT_VISIBLE_DEVICES=3;
+python -m vllm.entrypoints.openai.api_server \
+    --model /sfs/liuqi/local_cache/dyyyyyyyy/ScaleQuest-DeepSeekMath-7B-QGen \
+    --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+    --dtype bfloat16 \
+    --api-key informal_problem_generator \
+    --trust-remote-code \
+    --enable-prefix-caching \
+    --disable-log-requests \
+    --max-model-len 4096 \
+    --additional-config '{"ascend_scheduler_config":{}}' &
+```
+
 ## Evaluation: Falsify & KC
 ```shell
 export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
@@ -241,10 +260,20 @@ ldd `which python`
 export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
 MODEL_LIST=( \
     "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
-    "/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B" \
+    "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
+    "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
+    "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
+    "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
+    "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
+    "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
     "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
 )
 KEY_LIST=( \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
     "theorem_prover" \
     "theorem_prover" \
     "theorem_prover" \
@@ -264,15 +293,17 @@ for ((i=0; i<length; i++)); do
         --max-model-len 8192 &
 done
 
-
+# Firstly, eval Goedel and DeepSeek for 4-shot
 ulimit -s unlimited;
 python -m evaluator.fpg_evaluate_falsify_prove \
-    --load_path output/sft_wg/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack/problem_generation.20250828-210118.pkl \
-    --log_root output/sft_wg/Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack \
-    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1']" \
-    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover']" \
-    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
-    --num_concurrency 48 --kc_estimation_mode none --try_num 4
+    --load_path output/sft_ar_v2/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack/problem_generation.20250903-221358.pkl \
+    --log_root output/sft_ar_v2/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack \
+    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1','http://0.0.0.0:37213/v1','http://0.0.0.0:37214/v1','http://0.0.0.0:37215/v1','http://0.0.0.0:37216/v1','http://0.0.0.0:37217/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
+    --num_concurrency 48 --kc_estimation_mode none --try_num 1
+# Secondly, continue evaluating Kimina
+# TODO: Coding
 ```
 
 # Data Scaleup: Deductive Proving FineLeanCorups
