@@ -1280,13 +1280,13 @@ class SFT_LLMAutoregressiveProblemGenerationAgentV3(SFT_LLMAutoregressiveProblem
             # Numina-Lean
             # problem_type: str, e.g. unknown
             # source: str, e.g. unknown
-            return f'Flavoured "{conditions['problem_type']}" and suitable for posting on forums about "{conditions['source']}".'
+            return f'Flavoured "{conditions["problem_type"]}" and suitable for posting on forums about "{conditions["source"]}".'
         elif 'domain' in conditions.keys():
             assert 'difficulty' in conditions.keys()
             # FineLeanCorups
             # domain: List[str], e.g. ['Algebra -> Intermediate Algebra -> Other', 'Applied Mathematics -> Other -> Other']
             # difficulty: int, e.g. 1
-            return f'Flavoured {conditions['domain']} and of difficulty level {conditions['difficulty']}.'
+            return f'Flavoured {conditions["domain"]} and of difficulty level {conditions["difficulty"]}.'
     
     def gen_prompt(
         self,
