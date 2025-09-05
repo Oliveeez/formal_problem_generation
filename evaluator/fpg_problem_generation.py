@@ -5,8 +5,7 @@ import json
 import asyncio
 import traceback
 from datetime import datetime
-from typing import Optional
-from typing import Dict, Set, List, Any
+from typing import Dict, Set, List, Any, Tuple, Optional
 import pickle
 import regex as re
 import itertools as I
@@ -22,13 +21,16 @@ import aiofiles
 from common.constants import FPS_GLOBAL_SETTING, CORE_OPTIONS
 from common.utils import add_one_to_port
 from common.pantograph.server import PersistentServer
-from agent.problem_generation import ProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgentV2
+from common.pantograph.parsing_server import PersistentParsingServer
+from agent.problem_generation import ProblemFalsifier
+from agent.problem_generation import AutoregressiveProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgentV2, SFT_LLMAutoregressiveProblemGenerationAgentV3
 
 NEWLINE = '\n'
 # FPS_GLOBAL_SETTING['TO_SYNC_ENABLED'] = True
-AGENT_DICT: Dict[str, ProblemGenerationAgent] = {
+AGENT_DICT: Dict[str, AutoregressiveProblemGenerationAgent] = {
     'sft_ar' : SFT_LLMAutoregressiveProblemGenerationAgent,
-    'sft_ar_v2': SFT_LLMAutoregressiveProblemGenerationAgentV2
+    'sft_ar_v2': SFT_LLMAutoregressiveProblemGenerationAgentV2,
+    'sft_ar_v3': SFT_LLMAutoregressiveProblemGenerationAgentV3
 }
 
 
@@ -39,6 +41,10 @@ def main(
     api_key: str,
     model_name: str,
     n_servers: int=1,   # Assuming all servers share the same ip and have consecutive ports
+    falsify_base_url: Optional[str]=None,
+    falsify_api_key: Optional[str]=None,
+    falsify_model_name: Optional[str]=None,
+    falsify_n_servers: int=0,   # Assuming all servers share the same ip and have consecutive ports
     project_root: str='/home/ma-user/workspace/fps_pantograph/formal_problem_solving/data/MiniF2F',
     num_generation_attempt: int=5,
     reassemble_trajectory: bool=False,
@@ -71,6 +77,34 @@ def main(
     base_urls = [base_url]
     for _ in range(n_servers-1):
         base_urls.append(add_one_to_port(base_urls[-1]))
+    
+    available_falsifiers: List[Tuple[ProblemFalsifier, int]] = []
+    for _ in range(falsify_n_servers):
+        available_falsifiers.append([
+            ProblemFalsifier(
+                clients=[
+                    AsyncOpenAI(
+                        base_url=falsify_base_url,
+                        api_key=falsify_api_key
+                    )
+                ],
+                models=[falsify_model_name],
+                server=PersistentServer(
+                    is_state_based=True,
+                    tag='',
+                    _sync_init=False,
+                    imports=["Mathlib", "Aesop"],
+                    project_path=project_root,
+                    core_options=CORE_OPTIONS,
+                    timeout=300,
+                ),
+                temperature=0.0
+            ),
+            0
+        ])
+        falsify_base_url = add_one_to_port(falsify_base_url)
+    
+    
     available_servers = [
         PersistentServer(
             is_state_based=True,
@@ -80,6 +114,18 @@ def main(
             project_path=project_root,
             core_options=CORE_OPTIONS,
             timeout=300,
+        ) for i in range(num_concurrency)
+    ]
+    available_parsers = [
+        PersistentParsingServer(
+            max_count=32,
+            is_state_based=True,
+            tag='',
+            _sync_init=False,
+            imports=["Mathlib", "Aesop"],
+            project_path=project_root,
+            core_options=CORE_OPTIONS,
+            timeout=300
         ) for i in range(num_concurrency)
     ]
 
@@ -109,13 +155,22 @@ def main(
 
     async def generate_worker(condition: Any, key: Any, tag_i: int) -> None:
         server = available_servers.pop()
+        parser = available_parsers.pop()
+        if len(available_falsifiers) > 0:
+            falsifier_and_cnt = available_falsifiers[0]
+            falsifier_and_cnt[1] += 1
+            available_falsifiers.sort(key=lambda x : x[1])  # Load balancing
+        else:
+            falsifier_and_cnt = None
+        
         try:
             server.tag = str(tag_i)
+            parser.tag = str(tag_i)
             client = AsyncOpenAI(
                 base_url=base_urls[tag_i % len(base_urls)],
                 api_key=api_key
             )
-            problem_generator: ProblemGenerationAgent = AGENT_DICT[agent_name](
+            problem_generator: AutoregressiveProblemGenerationAgent = AGENT_DICT[agent_name](
                 gen_client=client,
                 gen_model_name=model_name,
                 max_search_trials=max_search_trials,
@@ -123,9 +178,14 @@ def main(
                 temperature=temperature,
                 max_tokens=(max_tokens if max_tokens > 0 else NOT_GIVEN)
             )
+            if falsifier_and_cnt is not None:
+                problem_generator.falsifiers.append(
+                    falsifier_and_cnt[0].falsify_async
+                )
             result = await problem_generator.generate_async(
                 conditions=condition,
                 server=server,
+                parser=parser,
                 reassemble_trajectory=reassemble_trajectory,
                 tag=str(tag_i),
                 verbose=False,
@@ -137,7 +197,12 @@ def main(
             logger.info(f'generate_worker({tag_i}, {condition}): generation failed due to: {repr(e)}\n{traceback.format_exc()}')
         finally:
             server.tag = ''
+            parser.tag = ''
             available_servers.insert(0, server)
+            available_parsers.insert(0, parser)
+        if len(available_falsifiers) > 0:
+            falsifier_and_cnt[1] -= 1
+            available_falsifiers.sort(key=lambda x : x[1])  # Load balancing
 
     async def _async_main():
         pending_tasks: Set[asyncio.Task] = set()

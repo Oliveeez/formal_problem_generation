@@ -21,6 +21,7 @@ from transformers import AutoTokenizer
 
 from common.constants import BANNED_TOKENS, SYSTEM_PROMPT_FPG, FALSIFY_TACTICS, BRACKET_PAIRINGS, CORE_OPTIONS
 from common.pantograph.server import PersistentServer, TacticFailure, ServerError
+from common.pantograph.parsing_server import PersistentParsingServer
 from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, Goal, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
 from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft, parse_idents, decompose_statement, proof_decompose, generate_submission_name, is_deductive_transition, remove_spaces
 from agent.proof_generation import ProofSearchResult, ProofSearchAgent, VersatileLLMWholeProofGenerationAgent
@@ -578,18 +579,38 @@ class ProblemGenerationAgent:
             submission_fvar = [v for v in result.trajectory[-1][0] if v.name == submission_name]
             assert len(submission_fvar) == 1, f'submission_name={submission_name}, new_context={[v.name for v in steps[-1].new_contexts]}'
             submission_fvar = submission_fvar[0]
-            
-            # Construct statement and proof
+            # Reconstruct header, statement and proof
+            open_set = set()
+            open_scoped_set = set()
+            option_set = set()
+            for s in steps:
+                if s.is_introducing:
+                    for l in s.header.splitlines():
+                        l = l.strip()
+                        if l.endswith(' in'):
+                            l = l[:-len('in')].strip()
+                        if l.startswith('open scoped'):
+                            for elem in l[len('open scoped'):].strip().split():
+                                open_scoped_set.add(elem)
+                        elif l.startswith('open'):
+                            for elem in l[len('open'):].strip().split():
+                                open_set.add(elem)
+                        elif l.startswith('set_option'):
+                            option_set.add(l[len('set_option'):].strip())
+            result.header = \
+                (('open scoped ' + ' '.join(open_scoped_set) + '\n') if len(open_scoped_set) > 0 else '') + \
+                (('open ' + ' '.join(open_set) + '\n') if len(open_set) > 0 else '') + \
+                '\n'.join(['set_option ' + t for t in option_set])
+
             problem_hypotheses = []
             for s in steps:
                 if s.is_introducing:
                     step_code = s.step_code
                     assert step_code.startswith('have ') and step_code.endswith(' := sorry')
                     problem_hypotheses.append('(' + step_code[len('have '):-len(' := sorry')] + ')')
-            
-            formal_solution = '\n\n'.join([s.step for s in steps if s.is_deducing] + [steps[-1].step.replace('submit_answer ', 'exact ')])
-            result.header = ''
             result.formal_statement = 'example\n' + '\n'.join(problem_hypotheses) + '\n: ' + submission_fvar.t + '\n:= sorry'
+                
+            formal_solution = '\n\n'.join([s.step for s in steps if s.is_deducing] + [steps[-1].step.replace('submit_answer ', 'exact ')])
             result.formal_solution_draft = formal_solution
         except Exception as e:
             logger.warning(f'validate_async({tag}): Initialization failed due to {repr(e)}')
@@ -599,40 +620,112 @@ class ProblemGenerationAgent:
         try:
             formal_statement = (('∀\n' + '\n'.join(problem_hypotheses) + '\n, ') if len(problem_hypotheses) > 0 else '') + submission_fvar.t
             try:
-                init_validation_state = await server.load_statement_async(formal_statement, intros=[(v.name if '✝' not in v.name else '_') for s in steps if s.is_introducing for v in s.new_contexts])
-            except TacticFailure:
-                open_set = set()
-                open_scoped_set = set()
-                option_set = set()
-                for s in steps:
-                    if s.is_introducing:
-                        for l in s.header.splitlines():
-                            l = l.strip()
-                            if l.endswith(' in'):
-                                l = l[:-len('in')].strip()
-                            if l.startswith('open scoped'):
-                                for elem in l[len('open scoped'):].strip().split():
-                                    open_scoped_set.add(elem)
-                            elif l.startswith('open'):
-                                for elem in l[len('open'):].strip().split():
-                                    open_set.add(elem)
-                            elif l.startswith('set_option'):
-                                option_set.add(l[len('set_option'):].strip())
-                result.header = \
-                    (('open scoped ' + ' '.join(open_scoped_set) + '\n') if len(open_scoped_set) > 0 else '') + \
-                    (('open ' + ' '.join(open_set) + '\n') if len(open_set) > 0 else '') + \
-                    '\n'.join(['set_option ' + t for t in option_set])
                 init_validation_state = await server.load_statement_async(formal_statement, intros=[(v.name if '✝' not in v.name else '_') for s in steps if s.is_introducing for v in s.new_contexts], header=result.header)
+            except TacticFailure:
+                init_validation_state = await server.load_statement_async(formal_statement, intros=[(v.name if '✝' not in v.name else '_') for s in steps if s.is_introducing for v in s.new_contexts], header='')
+                result.header = ''
             result.metainfo['is_statement_validated'] = True
         except Exception as e:
             logger.warning(f'validate_async({tag}): Statement validation failed due to {repr(e)}: {formal_statement}')
             return False
+        
         try:
-            final_validation_state = await server.goal_tactic_async(init_validation_state, 0, '{\n' + formal_solution + '\n}')
-            assert final_validation_state.is_solved, str(final_validation_state)
+            try:
+                final_validation_state = await server.goal_tactic_async(init_validation_state, 0, '{\n' + result.formal_solution_draft + '\n}')
+                assert final_validation_state.is_solved, str(final_validation_state)
+            except:
+                formal_solution = 'have h_submission := by {\n' + '\n'.join('  ' + l for l in formal_solution.splitlines() if l.strip() != '') + '\n}\nexact h_submission'
+                final_validation_state = await server.goal_tactic_async(init_validation_state, 0, '{\n' + formal_solution + '\n}')
+                assert final_validation_state.is_solved, str(final_validation_state)
+                result.formal_solution_draft = formal_solution
             result.metainfo['is_solution_validated'] = True
+            logger.info(f'validate_async({tag}): Solution validation succeeded.')
         except Exception as e:
             logger.warning(f'validate_async({tag}): Solution validation failed due to {repr(e)}: {formal_solution}')
+            return False
+        
+        return True
+    
+    @staticmethod
+    async def reparse_validate_async(
+        result: ProblemGenerationProcess,
+        server: PersistentServer,
+        parser: PersistentParsingServer,
+        tag: str='',
+    ) -> bool:
+        # I. Reproduce steps on PersistentParsingServer
+        try:
+            # Parse `target` on PersistentParsingServer
+            result.metainfo = json.loads(result.metainfo)
+            result.metainfo['is_statement_validated'] = False
+            result.metainfo['is_solution_validated'] = False
+            
+            steps = result.steps
+            cur_problem_state = await parser.load_statement_async('False')
+            for i_step, cur_step in enumerate(steps):
+                if cur_step.is_submitting:
+                    assert i_step == len(steps) - 1, f'(i_step == {i_step}) != (len(steps) - 1 == {len(steps) - 1})'
+                    break
+                new_problem_state = await parser.goal_tactic_async(cur_problem_state, 0, cur_step.step)
+                assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == '(False : Prop)', str(new_problem_state)
+                cur_problem_state = new_problem_state
+
+            submission_name = steps[-1].step_code[len('submit_answer '):]
+            submission_fvar = [v for v in cur_problem_state.goals[0].variables if v.name == submission_name]
+            assert len(submission_fvar) == 1, f'submission_name={submission_name}, cur_problem_state={[str(cur_problem_state)]}'
+            submission_fvar = submission_fvar[0]
+
+            submission_fvar_pp = [v for v in result.trajectory[-1][0] if v.name == submission_name]
+            assert len(submission_fvar_pp) == 1, f'submission_name={submission_name}, new_context={[v.name for v in steps[-1].new_contexts]}'
+            submission_fvar_pp = submission_fvar_pp[0]
+
+            # Construct statement
+            variables = []
+            context, target = decompose_statement(result.formal_statement)
+            for declaration in context:
+                if declaration[0] == '[':
+                    try:
+                        var_names, var_type = declaration[1:-1].split(':', 1)
+                    except ValueError:
+                        var_names = '_'
+                        var_type = declaration[1:-1]
+                    for name in var_names.strip().split():
+                        # print(name, var_type)
+                        variables.append((name.strip(), var_type))
+                else:
+                    assert '✝' not in declaration, f'declaration: {declaration}'
+                    try:
+                        var_names, var_type = declaration[1:-1].split(':', 1)
+                    except ValueError:
+                        var_names = declaration[1:-1]
+                        var_type = None
+                    for name in var_names.strip().split():
+                        if '✝' in name:
+                            name = '_'
+                        variables.append((name.strip(), var_type))
+            init_validation_state = await server.load_statement_async(
+                statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
+                intros=[v[0] for v in variables],
+                header=result.header
+            )
+        except Exception as e:
+            logger.warning(f'reparse_validate_async({tag}): Initialization failed due to {repr(e)}')
+            return False
+
+        # Validate proof
+        try:
+            try:
+                final_validation_state = await server.goal_tactic_async(init_validation_state, 0, '{\n' + result.formal_solution_draft + '\n}')
+                assert final_validation_state.is_solved, str(final_validation_state)
+            except:
+                formal_solution = 'have h_submission := by {\n' + '\n'.join('  ' + l for l in formal_solution.splitlines() if l.strip() != '') + '\n}\nexact h_submission'
+                final_validation_state = await server.goal_tactic_async(init_validation_state, 0, '{\n' + formal_solution + '\n}')
+                assert final_validation_state.is_solved, str(final_validation_state)
+                result.formal_solution_draft = formal_solution
+            result.metainfo['is_solution_validated'] = True
+            logger.info(f'reparse_validate_async({tag}): Solution validation succeeded.')
+        except Exception as e:
+            logger.warning(f'reparse_validate_async({tag}): Solution validation failed due to {repr(e)}: {formal_solution}')
             return False
         
         return True
@@ -664,6 +757,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
     def __init__(self, max_search_trials: int, *args, **kwargs) -> None:
         super().__init__()
         self.max_search_trials = max_search_trials
+        self.falsifiers = [self.tactic_falsify_async]
         if len(args) > 0 or len(kwargs) > 0:
             logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
 
@@ -679,10 +773,43 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
         The returned `new_contexts` field should be empty (`None` for submitting and `[]` for introducing / deducing)
         """
     
+    async def falsify_async(
+        self,
+        state: GoalState,
+        server: PersistentServer,
+        step_history: List[ProblemGenerationStep],
+        tag: str='',
+    ) -> Optional[str]:
+        for falsify_async in self.falsifiers:
+            proof = await falsify_async(
+                state=state,
+                server=server,
+                step_history=step_history,
+                tag=tag
+            )
+            if proof is not None:
+                return tag
+        return None
+    
+    @staticmethod
+    async def tactic_falsify_async(
+        state: GoalState,
+        server: PersistentServer,
+        step_history: List[ProblemGenerationStep],
+        tag: str='',
+    ) -> Optional[str]:
+        for tac in FALSIFY_TACTICS:
+            falsify_problem_state = await server.goal_tactic_async(state, 0, 'try ' + tac)
+            # assert not falsify_problem_state.is_solved, 'Introduced contradiction'
+            if falsify_problem_state.is_solved:
+                return tac
+        return None
+    
     async def generate_async(
             self,
             conditions: Any,
             server: PersistentServer,
+            parser: Optional[PersistentParsingServer]=None,
             reassemble_trajectory: bool=False,
             tag: str='',
             verbose: bool=False,
@@ -713,12 +840,22 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                 
                 if cur_step.is_submitting:
                     try:
+                        # Extract submitted fvar 
                         step_code = remove_comments(cur_step.step_code).strip()
                         assert step_code.startswith('submit_answer '), step_code
                         submission_name = step_code[len('submit_answer '):]
-                        assert submission_name in [v.name for v in cur_problem_state.goals[0].variables], f'submission_name={submission_name}, cur_problem_state={cur_problem_state}'
+                        submission_fvar = [v for v in cur_problem_state.goals[0].variables if v.name == submission_name]
+                        assert len(submission_fvar) == 1, f'submission_name={submission_name}, cur_problem_state={cur_problem_state}'
+                        submission_fvar = submission_fvar[0]
+                        # Reject '✝'
+                        assert '✝' not in submission_fvar.t
+                        # Reject direct submission of hypotheses
+                        for step in steps:
+                            if step.is_introducing:
+                                for v in step.new_contexts:
+                                    assert submission_fvar.t != v.t, f'submission_fvar.t={submission_fvar.t}, introduced_hyp={step.step_code}'
                     except:
-                        logger.debug(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, step {cur_step.category} failed due to {repr(e)}')
+                        logger.warning(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, submission step {cur_step.category} failed due to {repr(e)}')
                     
                     steps.append(cur_step)
                     result = ProblemGenerationProcess(
@@ -739,6 +876,14 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                         server=server,
                         tag=tag,
                     )
+                    if not is_valid and parser is not None:
+                        is_valid = await self.reparse_validate_async(
+                            result=result,
+                            server=server,
+                            parser=parser,
+                            tag=tag,
+                        )
+                    
                     is_analyzed = await self.analyze_async(
                         result=result,
                         states=states,
@@ -767,9 +912,8 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                         for banned_token in BANNED_TOKENS[1:]:
                             assert banned_token not in idents, f'Banned token "{banned_token}" in step "{step_code}"'
                         new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
-                        for tac in FALSIFY_TACTICS: # TODO: Stricter falsify check? (e.g. using prover model) - Maybe final check?
-                            falsify_problem_state = await server.goal_tactic_async(new_problem_state, 0, 'try ' + tac)
-                            assert not falsify_problem_state.is_solved, 'Introduced contradiction'
+                        falsify_proof = await self.falsify_async(state=new_problem_state, server=server, step_history=steps, tag=tag)
+                        assert falsify_proof is not None, f'new_problem_state=[{str(new_problem_state)}], Falsified by {[falsify_proof]}'
                     else:
                         raise RuntimeError(cur_step)
                     assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
@@ -777,15 +921,25 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                     logger.debug(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, step {cur_step.category} failed due to {repr(e)}')
                     continue
 
-
                 # If cur_step is successfully executed, add it.
                 cur_step.new_contexts = [
                     v for v in new_problem_state.goals[0].variables if
                         v.raw_name not in {vv.raw_name for vv in cur_problem_state.goals[0].variables}
                         # v not in forward_state.goals[0].variables
                 ]
-                if len(cur_step.new_contexts) == 0:
-                    logger.warning(f'generate_async({tag}): Unused step: {str(cur_step)}')
+                
+                # Reject if not introducing new contexts
+                if str(new_problem_state) == str(cur_problem_state):
+                    logger.warning(f'generate_async({tag}): State unchanged in step: {str(cur_step)}')
+                    continue
+                
+                # Reject if only introducing existing things
+                if cur_step.is_deducing:
+                    cur_context = {v.t for v in cur_problem_state.goals[0].variables}
+                    new_context = {v.t for v in new_problem_state.goals[0].variables}
+                    if new_context.issubset(cur_context):
+                        logger.warning(f'generate_async({tag}): No new deductions in step: {str(cur_step)}')
+                        continue
 
                 states.append(new_problem_state)
                 steps.append(cur_step)
@@ -1119,6 +1273,84 @@ Requirements
             }
         ]
 
+class SFT_LLMAutoregressiveProblemGenerationAgentV3(SFT_LLMAutoregressiveProblemGenerationAgent):
+    def format_condition(conditions: Any) -> str:
+        if 'problem_type' in conditions.keys():
+            assert 'source' in conditions.keys()
+            # Numina-Lean
+            # problem_type: str, e.g. unknown
+            # source: str, e.g. unknown
+            return f'Flavoured "{conditions['problem_type']}" and suitable for posting on forums about "{conditions['source']}".'
+        elif 'domain' in conditions.keys():
+            assert 'difficulty' in conditions.keys()
+            # FineLeanCorups
+            # domain: List[str], e.g. ['Algebra -> Intermediate Algebra -> Other', 'Applied Mathematics -> Other -> Other']
+            # difficulty: int, e.g. 1
+            return f'Flavoured {conditions['domain']} and of difficulty level {conditions['difficulty']}.'
+    
+    def gen_prompt(
+        self,
+        state: GoalState,
+        step_history: List[ProblemGenerationStep],
+        conditions: Tuple[str, str],
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
+        context = ''
+        vars_to_format = [v for v in state.goals[0].variables]
+        while len(vars_to_format) > 0:
+            for i in range(len(vars_to_format)):
+                if i + 1 == len(vars_to_format) or not (vars_to_format[i].t == vars_to_format[i+1].t and vars_to_format[i].v is None and vars_to_format[i+1].v is None):
+                    break
+            if i == 0:
+                context += str(vars_to_format[0]) + '\n'
+                vars_to_format.pop(0)
+            else:
+                context += ' '.join([v.name if v.name is not None else "_" for v in vars_to_format[:i+1]]) + f' : {vars_to_format[0].t}\n'
+                vars_to_format = vars_to_format[i+1:]
+        
+        introduced_fvars = []
+        for step in step_history:
+            if step.is_introducing:
+                lines = [l for l in step.step_draft.splitlines() if l != '']
+                while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
+                    lines.pop(0)
+                step_code = '\n'.join(lines)
+                assert step_code.startswith('have ') and step_code.endswith(' := sorry')
+                introduced_fvars.append(step_code[len('have '):-len(' := sorry')])
+        
+        introduced_fvars = '\n'.join(introduced_fvars)
+        prompt = f'''Given the introduced variables/hypotheses and the current context in Lean 4, propose the single most natural next step to explore toward a beautiful conclusion — either
+- derive a new intermediate fact,
+- introduce a fresh variable or hypothesis, or
+- submit one of the local facts as the final answer.
+
+Requirements
+1. {self.format_condition(conditions)}
+2. Fully formal Lean 4 code (inline comments in natural language are fine for planning and reasoning). Assume `import Mathlib`.
+
+# Introduced Variables/Hypotheses
+```lean4
+{introduced_fvars}
+```
+
+# Lean 4 Context
+```lean4
+{context.rstrip()}
+```
+'''.strip()
+        return [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT_FPG
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+
 class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
     def __init__(
         self,
@@ -1418,8 +1650,7 @@ class SFT_DeductiveProofGenerator(SFT_LLMWholeProblemGenerationAgent):
                 return [(model, proof)]
         return None
 
-
-class ProblemEvaluator:
+class MultipleProvers:
     def __init__(
         self,
         clients: List[AsyncOpenAI],
@@ -1428,10 +1659,8 @@ class ProblemEvaluator:
         max_tokens: int=-1,
         top_p: float=0.95,
         try_num: int=1,
-        kc_estimation_mode: str='full',  # To compute KC@1
     ):
         assert len(clients) == len(models), f'len(clients)={len(clients)}, len(models)={len(models)}'
-        assert kc_estimation_mode.lower() in ['none', 'early_stop', 'full'], f'kc_estimation_mode={kc_estimation_mode}'
         self.provers = [
             VersatileLLMWholeProofGenerationAgent(
                 client=c,
@@ -1442,7 +1671,6 @@ class ProblemEvaluator:
             ) for c, m in zip(clients, models)
         ]
         self.try_num = try_num
-        self.kc_estimation_mode = kc_estimation_mode.lower()
         self.last_token_usage = C.defaultdict(int)
     
     async def prove_async(
@@ -1488,6 +1716,28 @@ class ProblemEvaluator:
                     logger.debug(f'prove_async({tag}): failed due to exception {repr(e)}')
                     proofs.append(None)
         return models, proofs
+
+class ProblemEvaluator(MultipleProvers):
+    def __init__(
+        self,
+        clients: List[AsyncOpenAI],
+        models: List[str],
+        temperature: Optional[float]=1.0,
+        max_tokens: int=-1,
+        top_p: float=0.95,
+        try_num: int=1,
+        kc_estimation_mode: str='full',  # To compute KC@1
+    ):
+        super().__init__(
+            clients=clients,
+            models=models,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            try_num=try_num,
+        )
+        assert kc_estimation_mode.lower() in ['none', 'early_stop', 'full'], f'kc_estimation_mode={kc_estimation_mode}'
+        self.kc_estimation_mode = kc_estimation_mode.lower()
     
     async def evaluate_async(
         self,
@@ -1565,6 +1815,94 @@ class ProblemEvaluator:
                 'completion_tokens': self.last_token_usage['completion_tokens'],
                 'prompt_tokens': self.last_token_usage['prompt_tokens'],
             }
+
+class ProblemFalsifier(MultipleProvers):
+    def __init__(
+        self,
+        clients: List[AsyncOpenAI],
+        models: List[str],
+        server: PersistentServer,
+        temperature: Optional[float]=1.0,
+        max_tokens: int=-1,
+        top_p: float=0.95,
+        try_num: int=1,
+    ) -> None:
+        super().__init__(
+            clients=clients,
+            models=models,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            try_num=try_num,
+        )
+        self.server = server
+        self.data_train = []
+    
+    def __del__(self):
+        if len(self.data_train) > 0:
+            logger.warning(f'ProblemFalsifier: {len(self.data_train)} train samples not fetched.')
+            breakpoint()
+            logger.debug(f'ProblemFalsifier: {len(self.data_train)} train samples not fetched.')
+    
+    async def falsify_async(
+        self,
+        step_history: List[ProblemGenerationStep],
+        tag: str='',
+        *args, **kwargs
+    ) -> Optional[str]:
+        open_set = set()
+        open_scoped_set = set()
+        option_set = set()
+        
+        problem_hypotheses = []
+        intros = []
+        for s in step_history:
+            if s.is_introducing:
+                step_code = s.step_code
+                assert step_code.startswith('have ') and step_code.endswith(' := sorry')
+                declaration = step_code[len('have '):-len(' := sorry')].strip()
+                intros.extend(declaration.split(':', 1).strip().split())
+                problem_hypotheses.append('(' + declaration + ')')
+            for l in s.header.splitlines():
+                l = l.strip()
+                if l.endswith(' in'):
+                    l = l[:-len('in')].strip()
+                if l.startswith('open scoped'):
+                    for elem in l[len('open scoped'):].strip().split():
+                        open_scoped_set.add(elem)
+                elif l.startswith('open'):
+                    for elem in l[len('open'):].strip().split():
+                        open_set.add(elem)
+                elif l.startswith('set_option'):
+                    option_set.add(l[len('set_option'):].strip())
+        
+        formal_statement = 'example\n' + (('\n'.join(problem_hypotheses) + '\n: ') if len(problem_hypotheses) > 0 else ': ') + 'False := by\n  sorry'
+        load_statement = (('∀ ' + '\n'.join(problem_hypotheses) + '\n, ') if len(problem_hypotheses) > 0 else '') + 'False'
+        header = \
+            (('open scoped ' + ' '.join(open_scoped_set) + '\n') if len(open_scoped_set) > 0 else '') + \
+            (('open ' + ' '.join(open_set) + '\n') if len(open_set) > 0 else '') + \
+            '\n'.join(['set_option ' + t for t in option_set])
+        
+        falsify_proof = await self.prove_async(
+            server=self.server,
+            formal_statement=formal_statement,
+            load_statement=load_statement,
+            intros=intros,
+            header=header,
+            early_stop=True,
+            tag=tag
+        )
+        if falsify_proof is not None:
+            self.data_train.append(dict(
+                formal_statement=formal_statement,
+                load_statement=load_statement,
+                intros=intros,
+                header=header,
+                proof=falsify_proof
+            ))
+        
+        return falsify_proof
+
 
 class AutoformalizedProblemGenerationAgent(LLMWholeProblemGenerationAgent):
     def __init__(
