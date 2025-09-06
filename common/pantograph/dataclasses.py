@@ -22,6 +22,7 @@ class Variable:
     v: Optional[Expr] = None
     name: Optional[str] = None
     raw_name: Optional[str] = field(default=None, repr=False, hash=False, compare=False)
+    t_type: Optional[str] = None
 
     @staticmethod
     def parse(payload: Dict):
@@ -29,9 +30,12 @@ class Variable:
         raw_name = payload.get("name")
         t = parse_expr(payload["type"])
         v = payload.get("value")
+        t_type = payload.get("tType")
         if v:
             v = parse_expr(v)
-        return Variable(t, v, name, raw_name)
+        if t_type:
+            t_type = parse_expr(t_type)
+        return Variable(t, v, name, raw_name, t_type)
 
     def __str__(self):
         """
@@ -48,6 +52,7 @@ class Variable:
             't': self.t,
             'v': self.v,
             'name': self.name,
+            't_type': self.t_type
         }
 
 @dataclass(frozen=True)

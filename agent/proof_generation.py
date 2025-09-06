@@ -811,6 +811,7 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
         temperature: Optional[float]=None,
         max_tokens: int=-1,
         top_p: float=0.95,
+        extra_body: Optional[Dict]=None
     ) -> None:
         super().__init__()
         self.client = client
@@ -819,6 +820,7 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
         self.max_tokens = max_tokens
         self.top_p = top_p
         self.token_usage = C.defaultdict(int)
+        self.extra_body = extra_body
 
     @abstractmethod
     def gen_prompt(
@@ -867,7 +869,8 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
                     top_p=self.top_p,
                     timeout=API_TIMEOUT,
                     n=1,
-                    stop='<|im_end|>'
+                    stop='<|im_end|>',
+                    extra_body=self.extra_body
                 ))
             else:
                 response: ChatCompletion = (await self.client.chat.completions.create(
@@ -879,10 +882,13 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
                     top_p=self.top_p,
                     timeout=API_TIMEOUT,
                     n=1,
+                    extra_body=self.extra_body
                 ))
+            if response.choices[0].finish_reason == 'length':
+                logger.warning(f'Generation length exceeded: [{response.choices[0].message.content}]')
             self.token_usage['completion_tokens'] += response.usage.completion_tokens
             self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
-            
+            # breakpoint()
             proof = self.parse_proof(response.choices[0].message.content)
             idents = set(remove_comments(proof).split()).union(parse_idents(remove_comments(proof)))
             for banned_token in BANNED_TOKENS:
@@ -1008,7 +1014,64 @@ The plan should highlight key ideas, intermediate lemmas, and proof structures t
         """
         return extract_code(response).split(':= by', maxsplit=1)[-1]
 
-class DeepSeek_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
+class DeepSeek_nonCoT_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
+    def gen_prompt(
+        self,
+        state: GoalState,
+        formal_statement: Optional[str]=None,
+        conditions: Optional[str]=None,         # informal problem
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
+        informal_problem = conditions
+        header = ("""
+import Mathlib
+import Aesop
+
+""" + '\n'.join('set_option ' + t.replace('=', ' ') for t in CORE_OPTIONS)).strip()
+        
+        if formal_statement is None:
+            assert len(state.goals) == 1, f'state.goals={str(state)}'
+            g = state.goals[0]
+            assert all(v.v is None for v in g.variables), f'g.variables.v={[v.v for v in g.variables]}'
+            formal_statement = 'example\n' + (('\n'.join(f'({v.name or "_"} : {v.t})' for v in g.variables) + '\n') if len(g.variables) > 0 else '') + ': ' + g.target + ':= by\n  sorry'.strip()
+        else:
+            formal_statement = replace_sorry(formal_statement)
+            assert formal_statement.endswith(':= sorry')
+            formal_statement = formal_statement[:-len(':= sorry')] + ':= by\n  sorry'.strip()
+        
+        if informal_problem is not None:
+            formal_statement_with_code = f'/-- {informal_problem.strip()}-/\n' + formal_statement
+        else:
+            formal_statement_with_code = formal_statement
+        
+        prompt = f"""
+Complete the following Lean 4 code:
+
+```lean4
+{header}
+
+{formal_statement_with_code}
+```
+""".strip()
+
+        chat = [
+            {"role": "user", "content": prompt},
+        ]
+
+        return chat
+
+    def parse_proof(
+        self,
+        response: str
+    ) -> str:
+        """
+        Parse the step from generation results
+        """
+        return extract_code(response).split(':= by', maxsplit=1)[-1]
+
+class DeepSeek_CoT_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
     def gen_prompt(
         self,
         state: GoalState,
@@ -1072,7 +1135,8 @@ class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
     MODEL_STR_TO_CLS_DICT: Dict[str, LLMWholeProofGenerationAgent] = {
         'kimina' : Kimina_LLMWholeProofGenerationAgent,
         'goedel' : Goedel_LLMWholeProofGenerationAgent,
-        'deepseek' : DeepSeek_LLMWholeProofGenerationAgent,
+        'deepseek_cot' : DeepSeek_CoT_LLMWholeProofGenerationAgent,
+        'deepseek_noncot' : DeepSeek_nonCoT_LLMWholeProofGenerationAgent
     }
     
     def __init__(
@@ -1082,8 +1146,9 @@ class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
         temperature: Optional[float]=None,
         max_tokens: int=-1,
         top_p: float=0.95,
+        extra_body: Optional[Dict]=None
     ) -> None:
-        super().__init__(client, model, temperature, max_tokens, top_p)
+        super().__init__(client, model, temperature, max_tokens, top_p, extra_body)
         
         model_name = self.model[:-1] if self.model.endswith('/') else self.model
         model_name = model_name.split('/')[-1].lower()

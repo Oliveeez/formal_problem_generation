@@ -668,6 +668,12 @@ class PersistentServer:
         # Assuming `statement` to a `example`, e.g. `example (x : Real) : x^2 >= 0 := sorry`
         return await self.server.load_sorry_async(code)
 
+    @record_server_error
+    async def expr_type_async(self, expr: Expr) -> Expr:
+        return await self.server.expr_type_async(expr)
+
+    expr_type = to_sync(expr_type_async)
+
     def is_automatic(self):
         """
         Check if the server is running in automatic mode

@@ -176,6 +176,62 @@ python -m evaluator.fpg_problem_generation \
     --resume_from output/Goedel-Prover-V2-32B.cycle123_problem_generation_steps \
     --num_concurrency 64
 ```
+
+## Our Method V2
+```shell
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
+for i_experiment in 0 1 2 3
+do
+    export ASCEND_RT_VISIBLE_DEVICES=$i_experiment;
+    python -m vllm.entrypoints.openai.api_server \
+        --model /sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509+FineLeanCorpus-reasseblmed.82438.problem_generator.nopack \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key numina-lean-goedelv2_8b-fpgv2 \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 &
+done
+
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
+for i_experiment in 4 5 6 7
+do
+    export ASCEND_RT_VISIBLE_DEVICES=$i_experiment;
+    python -m vllm.entrypoints.openai.api_server \
+        --model /home/ma-user/local_cache/deepseek-ai/DeepSeek_nonCoT-Prover-V2-7B \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key theorem_proving \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 &
+done
+
+# Agent Run
+ulimit -s unlimited;
+python -m evaluator.fpg_problem_generation_starified \
+    --log_root output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509+FineLeanCorpus-reasseblmed.82438.problem_generator.nopack \
+    --agent_name sft_ar_v3 \
+    --num_generation_attempt 5000 \
+    --condition_sources "['fineleancorpus','numina_lean']" \
+    --base_url http://0.0.0.0:37210/v1 \
+    --api_key numina-lean-goedelv2_8b-fpgv2 \
+    --model_name /sfs/liuqi/ckpts/hf_ckpts/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509+FineLeanCorpus-reasseblmed.82438.problem_generator.nopack \
+    --n_servers 4 \
+    --falsify_base_url http://0.0.0.0:37214/v1 \
+    --falsify_api_key theorem_proving \
+    --falsify_model_name /home/ma-user/local_cache/deepseek-ai/DeepSeek_nonCoT-Prover-V2-7B \
+    --falsify_n_servers 4 \
+    --num_concurrency 64
+```
+
+
 ## Baseline - Whole Statement Generation
 ```shell
 # Initialize statement generator and deductive prover

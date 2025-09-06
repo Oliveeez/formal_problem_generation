@@ -991,3 +991,37 @@ def generate_submission_name(name_list: List[str]) -> str:
 
 def is_deductive_transition(state_before: List['Goal'], state_after: List['Goal']) -> bool:
     return len(state_before) == 1 and len(state_after) == 1 and state_before[0].target == state_after[0].target
+
+
+def starified_downsample(samples: list, n_total: int) -> list:
+    original_counts = C.Counter(samples)
+    total_original = len(samples)
+    
+    assert n_total <= total_original
+    
+    ideal_counts = {}
+    for item, count in original_counts.items():
+        ideal = (count / total_original) * n_total
+        ideal_counts[item] = ideal
+    
+    allocated = {item: int(ideal) for item, ideal in ideal_counts.items()}
+    current_total = sum(allocated.values())
+    
+    fractional_parts = [(item, ideal - allocated[item]) 
+                       for item, ideal in ideal_counts.items()]
+    
+    fractional_parts.sort(key=lambda x: -x[1])
+    
+    remaining = n_total - current_total
+    for i in range(remaining):
+        item = fractional_parts[i][0]
+        allocated[item] += 1
+    
+    result = []
+    
+    for item, target in allocated.items():
+        if target > 0:
+            result.extend([item] * target)
+    
+    random.shuffle(result)
+    return result
