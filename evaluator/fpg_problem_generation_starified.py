@@ -102,7 +102,7 @@ def main(
         for _ in range(falsify_n_servers-1):
             falsifier_base_urls.append(add_one_to_port(falsifier_base_urls[-1]))
             
-        available_falsifiers: List[Tuple[ProblemFalsifier, int]] = [
+        available_falsifiers: List[ProblemFalsifier] = [
             ProblemFalsifier(
                 clients=[
                     AsyncOpenAI(
@@ -157,7 +157,7 @@ def main(
             falsifier = available_falsifiers.pop()
         else:
             falsifier = None
-
+        
         try:
             server.tag = str(tag_i)
             parser.tag = str(tag_i)
@@ -235,9 +235,9 @@ def main(
                 with open(osp.join(log_root, log_prefix+'falsify_train.'+now+'.pkl'), 'wb') as f:
                     data_falsify_train = []
                     for agent in available_falsifiers:
-                        data_falsify_train.extend(agent[0].data_train)
-                        agent[0].data_train.clear()
-                    pickle.dump([agent[0].data_train for agent in available_falsifiers], f)
+                        data_falsify_train.extend(agent.data_train)
+                        agent.data_train.clear()
+                    pickle.dump(data_falsify_train, f)
         except Exception as e:
             logger.error(traceback.format_exc())
             import pdb; pdb.set_trace()

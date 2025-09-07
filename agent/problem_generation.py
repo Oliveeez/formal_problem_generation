@@ -485,6 +485,7 @@ class ProblemGenerationAgent:
         result: ProblemGenerationProcess,
         server: PersistentServer,
         tag: str='',
+        dfs: bool=True,
     ) -> bool:
         try:
             assert len(result.dependencies) > 0, 'Should analyze dependency first.'
@@ -536,7 +537,8 @@ class ProblemGenerationAgent:
                         is_success = True
                         G.remove_node(action_id)
                         deductive_state = new_deductive_state
-                        break
+                        if dfs:
+                            break
                     except Exception as e:
                         # breakpoint()
                         logger.debug(f'reassemble_trajectory_async({tag}): [{i}/{len(available_actions)}] available actions failed due to {repr(e)}')
@@ -933,8 +935,8 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                     if any((v.t_type is None or v.t_type == 'Prop') for v in cur_step.new_contexts):
                         falsify_proof = await self.falsify_async(state=new_problem_state, server=server, step_history=steps + [cur_step], tag=tag)
                         if falsify_proof is not None:
-                            logger.warning(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, new_problem_state=[{str(new_problem_state)}], falsified.')
-                            logger.debug(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, new_problem_state=[{str(new_problem_state)}], falsify_proof={[falsify_proof]}.')
+                            logger.warning(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, new_problem_state={[str(new_problem_state)]}, falsified.')
+                            logger.debug(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, new_problem_state={[str(new_problem_state)]}, falsify_proof={[falsify_proof]}.')
                             continue
                     
                 # Reject if not introducing new contexts
@@ -1285,7 +1287,7 @@ Requirements
 
 class SFT_LLMAutoregressiveProblemGenerationAgentV3(SFT_LLMAutoregressiveProblemGenerationAgent):
     @staticmethod
-    def format_condition(conditions: Any) -> str:
+    def format_condition(conditions: Dict) -> str:
         if 'problem_type' in conditions.keys():
             assert 'source' in conditions.keys()
             # Numina-Lean

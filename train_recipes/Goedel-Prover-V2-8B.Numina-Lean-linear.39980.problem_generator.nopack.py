@@ -22,13 +22,13 @@ from xtuner.utils import PROMPT_TEMPLATE, SYSTEM_TEMPLATE
 #                          PART 1  Settings                           #
 #######################################################################
 # Model
-pretrained_model_name_or_path = '/cache/ckpts/Goedel-Prover-V2-8B'
+pretrained_model_name_or_path = '/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B'
 use_varlen_attn = False
 
 # Data
 # Filter: Re-execute using same environment settting w/ eval; filter out tactics with banned tactics; filter out dummy tactics (state_before == state_after)
 data_path = [
-    '/cache/data/problem_generation_steps.reasseblmed.39509.jsonl'
+    '/home/ma-user/workspace/formal_problem_generation/data/Numina-Lean/problem_generation_steps.linear.39980.jsonl'
 ]
 prompt_template = PROMPT_TEMPLATE.default
 max_length = 8192
@@ -110,7 +110,7 @@ optim_wrapper = dict(
     type=AmpOptimWrapper,
     optimizer=dict(
         type=optim_type, lr=lr, betas=betas, weight_decay=weight_decay),
-    clip_grad=dict(max_norm=max_norm, error_if_nonfinite=True),
+    clip_grad=dict(max_norm=max_norm, error_if_nonfinite=False),
     accumulative_counts=accumulative_counts,
     loss_scale='dynamic',
     dtype='bfloat16'
@@ -197,7 +197,7 @@ load_from = None
 resume = False
 
 # Defaults to use random seed and disable `deterministic`
-randomness = dict(seed=3407, deterministic=False)
+randomness = dict(seed=42, deterministic=False)
 
 # set log processor
 log_processor = dict(by_epoch=False)
