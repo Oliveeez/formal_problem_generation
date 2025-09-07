@@ -56,7 +56,7 @@ async def async_worker(
     key: Any,
     agent: ProblemEvaluator,
     available_servers: List[PersistentServer],
-    finished_dict: Dict,
+    finished_list: Dict,
 ) -> None:
     server = available_servers.pop()
     server.tag = str(key)
@@ -79,7 +79,7 @@ async def async_worker(
         logger.warning(f'async_worker({key}): failed due to exception {repr(e)}')
     finally:
         result.metainfo = json.dumps(result.metainfo)
-        finished_dict[key] = result
+        finished_list[key] = result
         server.tag = ''
         available_servers.insert(0, server)
 
@@ -114,7 +114,7 @@ def main(
     assert kc_estimation_mode.lower() in ['none', 'early_stop', 'full'], f'kc_estimation_mode={kc_estimation_mode}'
     
     with open(load_path, 'rb') as f:
-        data_to_process = pickle.load(f)
+        conditions_sampled, finished_list = pickle.load(f)
     
     available_servers = [
         PersistentServer(
@@ -148,14 +148,13 @@ def main(
     ]
 
     tasks = [
-        (condition, sample) for (condition, sample) in data_to_process.items() if len(sample.formal_statement or '') > 0
+        i for (i, sample) in enumerate(finished_list) if len(sample.formal_statement or '') > 0
     ]
-    finished_dict = {condition : None for condition in data_to_process.keys()}
     logger.info(f'Evaluating {len(tasks)} samples.')
 
     async def _async_main():
         pending_tasks = set()
-        for i, (condition, sample) in enumerate(tasks):
+        for i, idx in enumerate(tasks):
             if len(pending_tasks) >= num_concurrency:
                 done_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in done_tasks:
@@ -167,11 +166,11 @@ def main(
             pending_tasks.add(
                 asyncio.create_task(
                     async_worker(
-                        result=sample,
-                        key=condition,
+                        result=finished_list[idx],
+                        key=idx,
                         agent=agents[i % len(agents)],
                         available_servers=available_servers,
-                        finished_dict=finished_dict,
+                        finished_list=finished_list,
                     )
                 )
             )
@@ -188,7 +187,7 @@ def main(
         try:
             logger.info(f"Finished generation, saving at {osp.join(log_root, log_prefix+now+'.(pkl|jsonl)')}")
             with open(osp.join(log_root, log_prefix+now+'.pkl'), 'wb') as f:
-                pickle.dump(finished_dict, f)
+                pickle.dump((conditions_sampled, finished_list), f)
         except Exception as e:
             logger.error(traceback.format_exc())
             import pdb; pdb.set_trace()

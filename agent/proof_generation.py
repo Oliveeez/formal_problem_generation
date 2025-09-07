@@ -1132,12 +1132,13 @@ The plan should highlight key ideas, intermediate lemmas, and proof structures t
         return extract_code(response).split(':= by', maxsplit=1)[-1]
 
 class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
-    MODEL_STR_TO_CLS_DICT: Dict[str, LLMWholeProofGenerationAgent] = {
-        'kimina' : Kimina_LLMWholeProofGenerationAgent,
-        'goedel' : Goedel_LLMWholeProofGenerationAgent,
-        'deepseek_cot' : DeepSeek_CoT_LLMWholeProofGenerationAgent,
-        'deepseek_noncot' : DeepSeek_nonCoT_LLMWholeProofGenerationAgent
-    }
+    MODEL_STR_TO_CLS: List[Tuple[str, LLMWholeProofGenerationAgent]] = [
+        ('kimina', Kimina_LLMWholeProofGenerationAgent),
+        ('goedel', Goedel_LLMWholeProofGenerationAgent),
+        ('deepseek_cot', DeepSeek_CoT_LLMWholeProofGenerationAgent),
+        ('deepseek_noncot', DeepSeek_nonCoT_LLMWholeProofGenerationAgent),
+        ('deepseek', DeepSeek_CoT_LLMWholeProofGenerationAgent),
+    ]
     
     def __init__(
         self,
@@ -1152,10 +1153,10 @@ class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
         
         model_name = self.model[:-1] if self.model.endswith('/') else self.model
         model_name = model_name.split('/')[-1].lower()
-        for k, v in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS_DICT.items():
+        for (k, v) in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS:
             if k in model_name:
-                assert all(kk not in model_name for kk in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS_DICT.keys() if kk != k), f'Ambiguous model: {model_name}'
-                logger.debug(f'Dispatching {v.__name__} to {model_name}')
+                assert all(kk not in model_name for (kk, _) in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS if kk != k), f'Ambiguous model: {model_name}'
+                logger.info(f'Dispatching {v.__name__} to {model_name}')
                 self.gen_prompt = v(None, None).gen_prompt
                 self.parse_proof = v(None, None).parse_proof
                 return
