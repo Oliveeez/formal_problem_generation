@@ -1155,7 +1155,7 @@ class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
         model_name = model_name.split('/')[-1].lower()
         for (k, v) in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS:
             if k in model_name:
-                assert all(kk not in model_name for (kk, _) in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS if kk != k), f'Ambiguous model: {model_name}'
+                # assert all(kk not in model_name for (kk, _) in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS if kk != k), f'Ambiguous model: {model_name}'
                 logger.info(f'Dispatching {v.__name__} to {model_name}')
                 self.gen_prompt = v(None, None).gen_prompt
                 self.parse_proof = v(None, None).parse_proof
