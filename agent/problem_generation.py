@@ -1382,7 +1382,7 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         self.provers = provers
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.token_usage = C.defaultdict(dict)
+        self.token_usage = C.defaultdict(list)
 
     @abstractmethod
     def format_statement_gen_prompt(self, condition: Any) -> str:
@@ -1402,8 +1402,6 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             temperature=self.temperature,
             n=1,
         ))
-        if 'generate_statement' not in self.token_usage.keys():
-            self.token_usage['generate_statement'] = C.defaultdict(list)
         self.token_usage['generate_statement'].append(response.usage.completion_tokens)
         self.token_usage['generate_statement'].append(response.usage.prompt_tokens)
         return self.parse_statement_gen_result(response.choices[0].message.content)
@@ -1421,7 +1419,7 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         Autoregressive problem generation.
         """
         # Initialize
-        self.token_usage = C.defaultdict(dict)
+        self.token_usage = C.defaultdict(list)
         assert server.is_automatic(), "Search must be run in automatic mode"
         
         time_start = time.time()
@@ -1539,7 +1537,7 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         result.metainfo['token_usage'] = self.token_usage
         result.metainfo['time_consumption'] = time.time() - time_start
         result.metainfo = json.dumps(result.metainfo)
-        self.token_usage = C.defaultdict(dict)
+        self.token_usage = C.defaultdict(list)
         return result
 
 class SFT_LLMWholeProblemGenerationAgent(LLMWholeProblemGenerationAgent):
