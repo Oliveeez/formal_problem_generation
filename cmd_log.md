@@ -498,7 +498,7 @@ python -m evaluator.fpg_whole_statement_generation_starified \
     --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
     --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B']" \
     --proof_try_num 2 \
-    --num_concurrency 64
+    --num_concurrency 96
 ```
 ## Baseline - Autoformalization-based Problem Generation
 ```shell

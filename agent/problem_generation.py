@@ -35,7 +35,6 @@ class ProblemGenerationAgent:
     def __init__(self, *args, **kwargs) -> None:
         if len(args) > 0 or len(kwargs) > 0:
             logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
-        self.token_usage = C.defaultdict(int)
     
     @staticmethod
     async def decompose_deductive_steps_async(
@@ -761,6 +760,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
         self.falsifiers = [self.tactic_falsify_async]
         if len(args) > 0 or len(kwargs) > 0:
             logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
+        self.token_usage = C.defaultdict(list)
 
     @abstractmethod
     async def gen_step_async(
@@ -819,6 +819,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
         Autoregressive problem generation.
         """
         # Initialize
+        self.token_usage = C.defaultdict(list)
         assert server.is_automatic(), "Search must be run in automatic mode"
         
         time_start = time.time()
@@ -893,12 +894,10 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                         tag=tag,
                         reassemble_trajectory=reassemble_trajectory
                     )
-                    result.metainfo['prompt_tokens'] = self.token_usage['prompt_tokens']
-                    result.metainfo['completion_tokens'] = self.token_usage['completion_tokens']
+                    result.metainfo['token_usage'] = self.token_usage
                     result.metainfo['time_consumption'] = time.time() - time_start
                     result.metainfo = json.dumps(result.metainfo)
-                    self.token_usage['prompt_tokens'] = 0
-                    self.token_usage['completion_tokens'] = 0
+                    self.token_usage = C.defaultdict(list)
                     return result
                 
                 # Not submitting: deducing or introducing
@@ -976,13 +975,11 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
             dependencies=[],
             trajectory=[(S.goals[0].variables, i) for i, S in enumerate(states)],
             metainfo=json.dumps({
-                'prompt_tokens' : self.token_usage['prompt_tokens'],
-                'completion_tokens' : self.token_usage['completion_tokens'],
+                'token_usage' : self.token_usage,
                 'time_consumption': time.time() - time_start
             })
         )
-        self.token_usage['prompt_tokens'] = 0
-        self.token_usage['completion_tokens'] = 0
+        self.token_usage = C.defaultdict(list)
 
         return result
 
@@ -1065,8 +1062,8 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
                 logger.debug(f'gen_steps_async(): Failed to generate tactics due to {repr(e)}')
                 continue
             
-            self.token_usage['completion_tokens'] += response.usage.completion_tokens
-            self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
+            self.token_usage['completion_tokens'].append(response.usage.completion_tokens)
+            self.token_usage['prompt_tokens'].append(response.usage.prompt_tokens)
             
             # Neglect failed generations
             if not response.choices[0].finish_reason == 'stop':
@@ -1385,6 +1382,7 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         self.provers = provers
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.token_usage = C.defaultdict(dict)
 
     @abstractmethod
     def format_statement_gen_prompt(self, condition: Any) -> str:
@@ -1404,8 +1402,10 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             temperature=self.temperature,
             n=1,
         ))
-        self.token_usage['completion_tokens'] += response.usage.completion_tokens
-        self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
+        if 'generate_statement' not in self.token_usage.keys():
+            self.token_usage['generate_statement'] = C.defaultdict(list)
+        self.token_usage['generate_statement'].append(response.usage.completion_tokens)
+        self.token_usage['generate_statement'].append(response.usage.prompt_tokens)
         return self.parse_statement_gen_result(response.choices[0].message.content)
     
     async def generate_async(
@@ -1421,6 +1421,7 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         Autoregressive problem generation.
         """
         # Initialize
+        self.token_usage = C.defaultdict(dict)
         assert server.is_automatic(), "Search must be run in automatic mode"
         
         time_start = time.time()
@@ -1490,7 +1491,7 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
                 raise RuntimeError(f'Statement generation: {repr(e)}')
             
             # formal_proofs = await self.generate_proofs_async(init_state, server)
-            self.provers.last_token_usage.clear()
+            self.provers.last_token_usage = C.defaultdict(list)
             models, proofs = await self.provers.prove_async(
                 server=server,
                 formal_statement=result.formal_statement,
@@ -1500,9 +1501,9 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
                 early_stop=True,
                 tag=tag
             )
-            self.token_usage['prompt_tokens'] += self.provers.last_token_usage['prompt_tokens']
-            self.token_usage['completion_tokens'] = self.provers.last_token_usage['completion_tokens']
-            self.provers.last_token_usage.clear()
+
+            self.token_usage['provers.prove'] = self.provers.last_token_usage
+            self.provers.last_token_usage = C.defaultdict(list)
             # formal_proofs.sort(key=lambda s : len(s[-1]))   # Ascending order of proof length (Kolmogorov Complexity)
             # Assuming formal_proofs[-1][-1] is the proof
             assert proofs[-1] is not None, 'Proof generation failed.'
@@ -1535,12 +1536,10 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             
         await self.reset_async()
 
-        result.metainfo['prompt_tokens'] = self.token_usage['prompt_tokens']
-        result.metainfo['completion_tokens'] = self.token_usage['completion_tokens']
+        result.metainfo['token_usage'] = self.token_usage
         result.metainfo['time_consumption'] = time.time() - time_start
         result.metainfo = json.dumps(result.metainfo)
-        self.token_usage['prompt_tokens'] = 0
-        self.token_usage['completion_tokens'] = 0
+        self.token_usage = C.defaultdict(dict)
         return result
 
 class SFT_LLMWholeProblemGenerationAgent(LLMWholeProblemGenerationAgent):
@@ -1875,7 +1874,6 @@ class AutoformalizedProblemGenerationAgent(LLMWholeProblemGenerationAgent):
             temperature=self.temperature,
             n=1,
         ))
-        self.token_usage['completion_tokens'] += response.usage.completion_tokens
-        self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
+        # TODO: Token usage
         return self.parse_statement_gen_result(response.choices[0].message.content)
     

@@ -117,7 +117,7 @@ def main(
             try_num=proof_try_num,
         ) for _ in range(num_concurrency // len(proof_gen_clients)) for clients, models in rotate(proof_gen_clients, proof_gen_model_names)
     ]
-    assert len(available_provers) == num_concurrency
+    assert len(available_provers) == num_concurrency, f'len(available_provers)={len(available_provers)} != num_concurrency={num_concurrency}'
     
     async def generate_worker(condition: List[Tuple[str, Any]], tag_i: int) -> None:
         server = available_servers.pop()

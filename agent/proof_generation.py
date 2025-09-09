@@ -1230,7 +1230,7 @@ class MultipleProvers:
             ) for c, m in zip(clients, models)
         ]
         self.try_num = try_num
-        self.last_token_usage = C.defaultdict(int)
+        self.last_token_usage = C.defaultdict(list)
     
     async def prove_async(
         self,
@@ -1242,7 +1242,7 @@ class MultipleProvers:
         early_stop: bool,
         tag: str='',
     ) -> Tuple[List[str], List[str]]: # [(model, proof), ...]
-        self.last_token_usage.clear()
+        self.last_token_usage = C.defaultdict(list)
         models = []
         proofs = []
         
@@ -1263,7 +1263,7 @@ class MultipleProvers:
                         tag=tag,
                     )
                     for k, v in prover.token_usage.items():
-                        self.last_token_usage[k] += v
+                        self.last_token_usage[k].append(v)
                     if result.success:
                         assert len(result.proof) == 1 and result.proof[0][0] == 0
                         proofs.append(result.proof[0][-1])
