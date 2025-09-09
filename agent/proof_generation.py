@@ -17,7 +17,7 @@ import vllm
 from transformers import AutoTokenizer
 
 from common.constants import BANNED_TOKENS, API_TIMEOUT, CODEBLOCK_PATTERN, CORE_OPTIONS
-from common.pantograph.server import Server, TacticFailure, ServerError
+from common.pantograph.server import Server, TacticFailure, ServerError, PersistentServer
 from common.pantograph.dataclasses import TacticHave, TacticLet, Tactic, GoalState, Goal, ProofSearchState, ProofGenerationResult, ProofSearchResult
 from common.utils import zip_strict, remove_comments, normalize_spaces, extract_code, replace_sorry, parse_idents
 
@@ -1131,6 +1131,50 @@ The plan should highlight key ideas, intermediate lemmas, and proof structures t
         """
         return extract_code(response).split(':= by', maxsplit=1)[-1]
 
+class SFT_Deductive_LLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
+    def gen_prompt(
+        self,
+        state: GoalState,
+        formal_statement: Optional[str]=None,
+        conditions: Optional[str]=None,         # informal problem
+    ) -> List[Dict[str, str]]:
+        """
+        Generate a prompt for the generator
+        """
+        header = ("""
+import Mathlib
+import Aesop
+
+""" + '\n'.join('set_option ' + t.replace('=', ' ') for t in CORE_OPTIONS)).strip()
+        prompt = f"""
+Assume the following header is executed:
+```lean4
+{header}
+```
+
+Generate a deductive proof for the following Lean 4 proof state:
+```lean4
+{str(state)}
+```
+""".strip()
+        return [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+
+    def parse_proof(
+        self,
+        response: str
+    ) -> str:
+        """
+        Parse the step from generation results
+        """
+        if response.startswith('<think>'):
+            response = response[len('<think>'):]
+        return extract_code(response)
+
 class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
     MODEL_STR_TO_CLS: List[Tuple[str, LLMWholeProofGenerationAgent]] = [
         ('kimina', Kimina_LLMWholeProofGenerationAgent),
@@ -1162,3 +1206,72 @@ class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
                 return
         
         assert False, f'Unable to parse model: {model_name}'
+
+class MultipleProvers:
+    def __init__(
+        self,
+        clients: List[AsyncOpenAI],
+        models: List[str],
+        temperature: Optional[float]=1.0,
+        max_tokens: int=-1,
+        top_p: float=0.95,
+        try_num: int=1,
+        extra_body: Optional[Dict] = None
+    ):
+        assert len(clients) == len(models), f'len(clients)={len(clients)}, len(models)={len(models)}'
+        self.provers = [
+            VersatileLLMWholeProofGenerationAgent(
+                client=c,
+                model=m,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                extra_body=extra_body
+            ) for c, m in zip(clients, models)
+        ]
+        self.try_num = try_num
+        self.last_token_usage = C.defaultdict(int)
+    
+    async def prove_async(
+        self,
+        server: PersistentServer,
+        formal_statement: str,
+        load_statement: str,
+        intros: List[str],
+        header: str,
+        early_stop: bool,
+        tag: str='',
+    ) -> Tuple[List[str], List[str]]: # [(model, proof), ...]
+        self.last_token_usage.clear()
+        models = []
+        proofs = []
+        
+        for _ in range(self.try_num):
+            for prover in self.provers:
+                prover.token_usage.clear()
+                models.append(prover.model)
+                try:
+                    init_state = await server.load_statement_async(
+                        statement=load_statement,
+                        intros=intros,
+                        header=header
+                    )
+                    result = await prover.search_async(
+                        server=server,
+                        init_state=init_state,
+                        formal_statement=formal_statement,
+                        tag=tag,
+                    )
+                    for k, v in prover.token_usage.items():
+                        self.last_token_usage[k] += v
+                    if result.success:
+                        assert len(result.proof) == 1 and result.proof[0][0] == 0
+                        proofs.append(result.proof[0][-1])
+                        if early_stop:
+                            return models, proofs
+                    else:
+                        proofs.append(None)
+                except Exception as e:
+                    logger.debug(f'prove_async({tag}): failed due to exception {repr(e)}')
+                    proofs.append(None)
+        return models, proofs

@@ -21,16 +21,12 @@ import aiofiles
 from common.constants import FPS_GLOBAL_SETTING, CORE_OPTIONS
 from common.utils import add_one_to_port, starified_downsample
 from common.pantograph.server import PersistentServer
-from common.pantograph.parsing_server import PersistentParsingServer
-from agent.problem_generation import ProblemFalsifier
-from agent.problem_generation import AutoregressiveProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgentV2, SFT_LLMAutoregressiveProblemGenerationAgentV3
+from agent.problem_generation import LLMWholeProblemGenerationAgent, SFT_LLMWholeProblemGenerationAgent
 
 NEWLINE = '\n'
 # FPS_GLOBAL_SETTING['TO_SYNC_ENABLED'] = True
-AGENT_DICT: Dict[str, AutoregressiveProblemGenerationAgent] = {
-    'sft_ar' : SFT_LLMAutoregressiveProblemGenerationAgent,
-    'sft_ar_v2': SFT_LLMAutoregressiveProblemGenerationAgentV2,
-    'sft_ar_v3': SFT_LLMAutoregressiveProblemGenerationAgentV3
+AGENT_DICT: Dict[str, LLMWholeProblemGenerationAgent] = {
+    'sft_wg': SFT_LLMWholeProblemGenerationAgent
 }
 CONDITION_FILE_DICT = {
     'fineleancorpus' : 'data/conditions.fineleancorpus.82438.json',
@@ -42,23 +38,21 @@ def main(
     agent_name: str,
     num_generation_attempt: int,    # 10000
     condition_sources: List[str],   # fineleancorpus, numina_lean
-    base_url: str,
-    api_key: str,
-    model_name: str,
-    n_servers: int=1,   # Assuming all servers share the same ip and have consecutive ports
-    falsify_base_url: Optional[str]=None,
-    falsify_api_key: Optional[str]=None,
-    falsify_model_name: Optional[str]=None,
-    falsify_n_servers: int=0,   # Assuming all servers share the same ip and have consecutive ports
+    statement_gen_base_url: str,
+    statement_gen_api_key: str,
+    statement_gen_model_name: str,
+    proof_gen_base_urls: List[str],
+    proof_gen_api_keys: List[str],
+    proof_gen_model_names: List[str],
     project_root: str='/home/ma-user/workspace/fps_pantograph/formal_problem_solving/data/MiniF2F',
-    reassemble_trajectory: bool=False,
     temperature: float=1.0,
-    max_search_trials: int=80,
-    num_max_samples_per_trial: int=8,
+    num_max_samples_per_trial: int=1,
     max_tokens: int=-1,
     num_concurrency: int=12,
     resume_from: Optional[str]=None,
 ):
+    assert len(proof_gen_base_urls) == len(proof_gen_api_keys), f'{len(proof_gen_base_urls)} != {len(proof_gen_api_keys)}'
+    assert len(proof_gen_api_keys) == len(proof_gen_model_names), f'{len(proof_gen_api_keys)} != {len(proof_gen_model_names)}'
     saved_args = {**locals()}
     
     now = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -91,39 +85,17 @@ def main(
         finished = [None for _ in range(len(conditions_sampled))]
         
     logger.info(f"Created {len([v for v in finished if v is None])} tasks")
-
-    base_urls = [base_url]
-    for _ in range(n_servers-1):
-        base_urls.append(add_one_to_port(base_urls[-1]))
     
-    if falsify_n_servers > 0:
-        falsifier_base_urls = [falsify_base_url]
-        for _ in range(falsify_n_servers-1):
-            falsifier_base_urls.append(add_one_to_port(falsifier_base_urls[-1]))
-            
-        available_falsifiers: List[ProblemFalsifier] = [
-            ProblemFalsifier(
-                clients=[
-                    AsyncOpenAI(
-                        base_url=falsifier_base_urls[i % falsify_n_servers],
-                        api_key=falsify_api_key
-                    )
-                ],
-                models=[falsify_model_name],
-                server=PersistentServer(
-                    is_state_based=True,
-                    tag=f'Falsify-{i}',
-                    _sync_init=False,
-                    imports=["Mathlib", "Aesop"],
-                    project_path=project_root,
-                    core_options=CORE_OPTIONS,
-                    timeout=60,
-                ),
-                temperature=0.0
-            ) for i in range(num_concurrency)
-        ]
-    else:
-        available_falsifiers = []
+    statement_gen_client = AsyncOpenAI(
+        base_url=statement_gen_base_url,
+        api_key=statement_gen_api_key
+    )
+    proof_gen_clients = [
+        AsyncOpenAI(
+            base_url=proof_gen_base_url,
+            api_key=proof_gen_api_key
+        ) for (proof_gen_base_url, proof_gen_api_key) in zip(proof_gen_base_urls, proof_gen_api_keys)
+    ]
     
     available_servers = [
         PersistentServer(
@@ -136,67 +108,37 @@ def main(
             timeout=300,
         ) for i in range(num_concurrency)
     ]
-    available_parsers = [
-        PersistentParsingServer(
-            max_count=32,
-            is_state_based=True,
-            tag='',
-            _sync_init=False,
-            imports=["Mathlib", "Aesop"],
-            project_path=project_root,
-            core_options=CORE_OPTIONS,
-            timeout=300
-        ) for i in range(num_concurrency)
-    ]
-
+    
     async def generate_worker(condition: List[Tuple[str, Any]], tag_i: int) -> None:
         server = available_servers.pop()
-        parser = available_parsers.pop()
-        if len(available_falsifiers) > 0:
-            falsifier = available_falsifiers.pop()
-        else:
-            falsifier = None
-        
         try:
             server.tag = str(tag_i)
-            parser.tag = str(tag_i)
-            client = AsyncOpenAI(
-                base_url=base_urls[tag_i % len(base_urls)],
-                api_key=api_key
-            )
-            problem_generator: AutoregressiveProblemGenerationAgent = AGENT_DICT[agent_name](
-                gen_client=client,
-                gen_model_name=model_name,
-                max_search_trials=max_search_trials,
+            problem_generator: LLMWholeProblemGenerationAgent = AGENT_DICT[agent_name](
+                statement_gen_client=statement_gen_client,
+                statement_gen_model=statement_gen_model_name,
+                proof_gen_clients=proof_gen_clients,
+                proof_gen_models=proof_gen_model_names,
                 num_max_samples_per_trial=num_max_samples_per_trial,
                 temperature=temperature,
                 max_tokens=(max_tokens if max_tokens > 0 else NOT_GIVEN)
             )
-            # breakpoint()
-            if falsifier is not None:
-                problem_generator.falsifiers.append(
-                    falsifier.falsify_async
-                )
             result = await problem_generator.generate_async(
                 conditions={k : v for (k, v) in condition},
                 server=server,
-                parser=parser,
-                reassemble_trajectory=reassemble_trajectory,
+                decompose_steps=False,
+                reassemble_trajectory=False,
                 tag=str(tag_i),
                 verbose=False,
             )
-            
-            logger.info(f'generate_worker({tag_i}, {condition}): generation finished: {"" if result.header is None else (result.header.rstrip() + NEWLINE)}{result.formal_statement}')
+            if result.formal_solution_draft is not None:
+                logger.opt(colors=True).info(f'<green>generate_worker({tag_i}, {condition}): generation succeeded.</green>')
+                logger.info("" if result.header is None else (result.header.rstrip() + NEWLINE) + result.formal_statement)
             finished[tag_i] = result
         except Exception as e:
             logger.info(f'generate_worker({tag_i}, {condition}): generation failed due to: {repr(e)}\n{traceback.format_exc()}')
         finally:
             server.tag = ''
-            parser.tag = ''
             available_servers.insert(0, server)
-            available_parsers.insert(0, parser)
-            if falsifier is not None:
-                available_falsifiers.insert(0, falsifier)
 
     async def _async_main():
         pending_tasks: Set[asyncio.Task] = set()
@@ -229,14 +171,6 @@ def main(
             logger.info(f"Finished generation, saving at {osp.join(log_root, log_prefix+now+'.(pkl|jsonl)')}")
             with open(osp.join(log_root, log_prefix+now+'.pkl'), 'wb') as f:
                 pickle.dump((conditions_sampled, finished), f)
-            if len(available_falsifiers) > 0:
-                breakpoint()
-                with open(osp.join(log_root, log_prefix+'falsify_train.'+now+'.pkl'), 'wb') as f:
-                    data_falsify_train = []
-                    for agent in available_falsifiers:
-                        data_falsify_train.extend(agent.data_train)
-                        agent.data_train.clear()
-                    pickle.dump(data_falsify_train, f)
         except Exception as e:
             logger.error(traceback.format_exc())
             import pdb; pdb.set_trace()
