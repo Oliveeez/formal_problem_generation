@@ -27,28 +27,11 @@ from tqdm import tqdm
 import msgspec
 
 from common.constants import OPEN_HEADER, CORE_OPTIONS, MVAR_PATTERN, BANNED_TOKENS
-from common.utils import remove_comments, normalize_spaces, remove_spaces, normalize_draft, remove_min_whitespace, chunk_list, replace_sorry, replace_calc, remove_multiline_comments
+from common.utils import remove_comments, normalize_spaces, remove_spaces, normalize_draft, remove_min_whitespace, chunk_list, replace_sorry, replace_calc, remove_multiline_comments, rotate
 from common.pantograph.dataclasses import TacticInvocation, Goal, GoalState, ProblemGenerationStep, ProblemGenerationProcess, TacticDraft
 from common.pantograph.server import Server, PersistentServer, TacticFailure, ServerError
 from common.pantograph.parsing_server import PersistentParsingServer
 from agent.problem_generation import ProblemEvaluator
-
-def rotate(*lists):
-    assert lists
-    
-    length = len(lists[0])
-    for lst in lists:
-        assert len(lst) == length
-    
-    if length == 0:
-        return []
-    
-    current_lists = [lst.copy() for lst in lists]
-    
-    for _ in range(length):
-        next_lists = [lst[-1:] + lst[:-1] for lst in current_lists]
-        current_lists = next_lists
-        yield tuple(current_lists)
 
 
 async def async_worker(

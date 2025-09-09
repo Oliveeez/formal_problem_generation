@@ -1025,3 +1025,20 @@ def starified_downsample(samples: list, n_total: int) -> list:
     
     random.shuffle(result)
     return result
+
+def rotate(*lists):
+    assert lists
+    
+    length = len(lists[0])
+    for lst in lists:
+        assert len(lst) == length
+    
+    if length == 0:
+        return []
+    
+    current_lists = [lst.copy() for lst in lists]
+    
+    for _ in range(length):
+        next_lists = [lst[-1:] + lst[:-1] for lst in current_lists]
+        current_lists = next_lists
+        yield tuple(current_lists)

@@ -19,8 +19,9 @@ from fire import Fire
 import aiofiles
 
 from common.constants import FPS_GLOBAL_SETTING, CORE_OPTIONS
-from common.utils import add_one_to_port, starified_downsample
+from common.utils import add_one_to_port, starified_downsample, rotate
 from common.pantograph.server import PersistentServer
+from agent.proof_generation import MultipleProvers
 from agent.problem_generation import LLMWholeProblemGenerationAgent, SFT_LLMWholeProblemGenerationAgent
 
 NEWLINE = '\n'
@@ -44,9 +45,9 @@ def main(
     proof_gen_base_urls: List[str],
     proof_gen_api_keys: List[str],
     proof_gen_model_names: List[str],
+    proof_try_num: int=1,
     project_root: str='/home/ma-user/workspace/fps_pantograph/formal_problem_solving/data/MiniF2F',
-    temperature: float=1.0,
-    num_max_samples_per_trial: int=1,
+    temperature: Optional[float]=1.0,
     max_tokens: int=-1,
     num_concurrency: int=12,
     resume_from: Optional[str]=None,
@@ -85,18 +86,7 @@ def main(
         finished = [None for _ in range(len(conditions_sampled))]
         
     logger.info(f"Created {len([v for v in finished if v is None])} tasks")
-    
-    statement_gen_client = AsyncOpenAI(
-        base_url=statement_gen_base_url,
-        api_key=statement_gen_api_key
-    )
-    proof_gen_clients = [
-        AsyncOpenAI(
-            base_url=proof_gen_base_url,
-            api_key=proof_gen_api_key
-        ) for (proof_gen_base_url, proof_gen_api_key) in zip(proof_gen_base_urls, proof_gen_api_keys)
-    ]
-    
+        
     available_servers = [
         PersistentServer(
             is_state_based=True,
@@ -109,16 +99,35 @@ def main(
         ) for i in range(num_concurrency)
     ]
     
+    statement_gen_client = AsyncOpenAI(
+        base_url=statement_gen_base_url,
+        api_key=statement_gen_api_key
+    )
+    proof_gen_clients = [
+        AsyncOpenAI(
+            base_url=proof_gen_base_url,
+            api_key=proof_gen_api_key
+        ) for (proof_gen_base_url, proof_gen_api_key) in zip(proof_gen_base_urls, proof_gen_api_keys)
+    ]
+    available_provers = [
+        MultipleProvers(
+            clients=clients,
+            models=models,
+            max_tokens=max_tokens,
+            try_num=proof_try_num,
+        ) for _ in range(num_concurrency // len(proof_gen_clients)) for clients, models in rotate(proof_gen_clients, proof_gen_model_names)
+    ]
+    assert len(available_provers) == num_concurrency
+    
     async def generate_worker(condition: List[Tuple[str, Any]], tag_i: int) -> None:
         server = available_servers.pop()
+        prover = available_provers.pop()
         try:
             server.tag = str(tag_i)
             problem_generator: LLMWholeProblemGenerationAgent = AGENT_DICT[agent_name](
                 statement_gen_client=statement_gen_client,
                 statement_gen_model=statement_gen_model_name,
-                proof_gen_clients=proof_gen_clients,
-                proof_gen_models=proof_gen_model_names,
-                num_max_samples_per_trial=num_max_samples_per_trial,
+                provers=prover,
                 temperature=temperature,
                 max_tokens=(max_tokens if max_tokens > 0 else NOT_GIVEN)
             )
@@ -139,6 +148,7 @@ def main(
         finally:
             server.tag = ''
             available_servers.insert(0, server)
+            available_provers.insert(0, prover)
 
     async def _async_main():
         pending_tasks: Set[asyncio.Task] = set()

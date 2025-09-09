@@ -24,7 +24,7 @@ from common.pantograph.server import PersistentServer, TacticFailure, ServerErro
 from common.pantograph.parsing_server import PersistentParsingServer
 from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, Goal, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
 from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft, parse_idents, decompose_statement, proof_decompose, generate_submission_name, is_deductive_transition, remove_spaces
-from agent.proof_generation import ProofSearchResult, ProofSearchAgent, VersatileLLMWholeProofGenerationAgent
+from agent.proof_generation import ProofSearchResult, ProofSearchAgent, VersatileLLMWholeProofGenerationAgent, MultipleProvers
 from agent.statement_autoformalization import VersatileLLMStatementAutoformalizationAgent
 
 class ProblemGenerationAgent:
@@ -1370,10 +1370,8 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         self,
         statement_gen_client: AsyncOpenAI,
         statement_gen_model: str,
-        proof_gen_clients: List[AsyncOpenAI],
-        proof_gen_models: List[str],
+        provers: MultipleProvers,
         *args,
-        num_max_samples_per_trial: int=1,
         temperature: Optional[float]=None,
         max_tokens: int=NOT_GIVEN,
         **kwargs
@@ -1382,13 +1380,9 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         if len(args) > 0 or len(kwargs) > 0:
             logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
         
-        assert len(proof_gen_clients) > 0 and len(proof_gen_clients) == len(proof_gen_models)
-        
         self.statement_gen_client = statement_gen_client
         self.statement_gen_model = statement_gen_model
-        self.proof_gen_clients = proof_gen_clients
-        self.proof_gen_models = proof_gen_models
-        self.num_max_samples_per_trial = num_max_samples_per_trial
+        self.provers = provers
         self.temperature = temperature
         self.max_tokens = max_tokens
 
@@ -1413,54 +1407,6 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
         self.token_usage['completion_tokens'] += response.usage.completion_tokens
         self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
         return self.parse_statement_gen_result(response.choices[0].message.content)
-    
-    @abstractmethod
-    def format_proof_gen_prompt(self, init_state: GoalState) -> str:
-        pass
-    
-    @abstractmethod
-    def parse_proof_gen_result(self, output: str) -> str:
-        pass
-    
-    async def generate_one_proof_async(self, init_state: GoalState, server: PersistentServer, client: AsyncOpenAI, model: str) -> Optional[str]:
-        try:
-            # Generate, parse, and validate one proof
-            response: ChatCompletion = (await client.chat.completions.create(
-                model=model,
-                messages=self.format_proof_gen_prompt(init_state),
-                max_tokens=self.max_tokens,
-                stream=False,
-                temperature=self.temperature,
-                n=1,
-            ))
-            self.token_usage['completion_tokens'] += response.usage.completion_tokens
-            self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
-            proof = self.parse_proof_gen_result(response.choices[0].message.content)
-            proof_code = remove_comments(proof)
-            idents = set(proof_code.split()).union(parse_idents(proof_code))
-            # No banned token allowed
-            for banned_token in BANNED_TOKENS:
-                assert banned_token not in idents, f'Banned token "{banned_token}" in proof "{proof_code}"'
-            # Goal should be solved
-            final_state = await server.goal_tactic_async(init_state, 0, '{\n' + proof_code + '\n}')
-            assert final_state.is_solved, '!final_state.is_solved'
-            return proof
-        except:
-            return None
-    
-    async def generate_proofs_async(self, init_state: GoalState, server: PersistentServer) -> List[Tuple[str, str]]:
-        tasks = [(client, model) for _ in range(self.num_max_samples_per_trial) for (client, model) in zip(self.proof_gen_clients, self.proof_gen_models)]
-        results = await asyncio.gather(*[
-            self.generate_one_proof_async(
-                init_state=init_state,
-                server=server,
-                client=client,
-                model=model
-            ) for (client, model) in tasks
-        ])
-        assert len(tasks) == len(results)
-        return [(model, proof) for ((client, model), proof) in zip(tasks, results) if proof is not None]
-        
     
     async def generate_async(
             self,
@@ -1531,9 +1477,10 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
                             if '✝' in name:
                                 name = '_'
                             variables.append((name.strip(), var_type))
-            
+
+                load_statement = (('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target
                 init_state = await server.load_statement_async(
-                    statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
+                    statement=load_statement,
                     intros=[v[0] for v in variables],
                     header=load_header
                 )
@@ -1542,12 +1489,26 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
             except Exception as e:
                 raise RuntimeError(f'Statement generation: {repr(e)}')
             
-            formal_proofs = await self.generate_proofs_async(init_state, server)
-            formal_proofs.sort(key=lambda s : len(s[-1]))   # Ascending order of proof length (Kolmogorov Complexity)
-            assert len(formal_proofs) > 0, 'Proof generation failed.'
-            logger.info(f'generate_async({tag}): Proven by {[s[0] for s in formal_proofs]}')
+            # formal_proofs = await self.generate_proofs_async(init_state, server)
+            self.provers.last_token_usage.clear()
+            models, proofs = await self.provers.prove_async(
+                server=server,
+                formal_statement=result.formal_statement,
+                load_statement=load_statement,
+                intros=[v[0] for v in variables],
+                header=result.header,
+                early_stop=True,
+                tag=tag
+            )
+            self.token_usage['prompt_tokens'] += self.provers.last_token_usage['prompt_tokens']
+            self.token_usage['completion_tokens'] = self.provers.last_token_usage['completion_tokens']
+            self.provers.last_token_usage.clear()
+            # formal_proofs.sort(key=lambda s : len(s[-1]))   # Ascending order of proof length (Kolmogorov Complexity)
+            # Assuming formal_proofs[-1][-1] is the proof
+            assert proofs[-1] is not None, 'Proof generation failed.'
+            logger.info(f'generate_async({tag}): Proven by {models[-1]}')
             
-            result.formal_solution_draft = formal_proofs[0][-1]
+            result.formal_solution_draft = proofs[-1]
             
             if decompose_steps:
                 deductive_steps, deductive_states = await self.decompose_deductive_steps_async(
@@ -1565,8 +1526,8 @@ class LLMWholeProblemGenerationAgent(ProblemGenerationAgent):
                         tag=tag,
                         reassemble_trajectory=reassemble_trajectory
                     )
-                
-            result.metainfo['all_formal_proofs'] = formal_proofs
+            
+            result.metainfo['proving_results'] = (models, proofs)
             logger.info(f'generate_async({tag}): generation succeeded.')
         except Exception as e:
             logger.debug(f'generate_async({tag}): generation failed due to traceback: {traceback.format_exc()}')
@@ -1607,131 +1568,36 @@ Requirements
             output = output[len('<think>'):]
         return extract_code(output)
     
-    def format_proof_gen_prompt(self, init_state: GoalState) -> str:
-        header = ("""
-import Mathlib
-import Aesop
 
-""" + '\n'.join('set_option ' + t.replace('=', ' ') for t in CORE_OPTIONS)).strip()
-        prompt = f"""
-Assume the following header is executed:
-```lean4
-{header}
-```
-
-Generate a deductive proof for the following Lean 4 proof state:
-```lean4
-{str(init_state)}
-```
-""".strip()
-        return [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-
-    def parse_proof_gen_result(self, output: str) -> str:
-        if output.startswith('<think>'):
-            output = output[len('<think>'):]
-        return extract_code(output)
-
-class SFT_DeductiveProofGenerator(SFT_LLMWholeProblemGenerationAgent):
-    def __init__(
-        self,
-        proof_gen_clients: List[AsyncOpenAI],
-        proof_gen_models: List[str],
-        *args,
-        num_max_samples_per_trial: int=1,
-        temperature: Optional[float]=None,
-        max_tokens: int=NOT_GIVEN,
-        **kwargs
-    ) -> None:
-        super().__init__(None, None, proof_gen_clients, proof_gen_models, *args, num_max_samples_per_trial=num_max_samples_per_trial, temperature=temperature, max_tokens=max_tokens, **kwargs)
+# class SFT_DeductiveProofGenerator(SFT_LLMWholeProblemGenerationAgent):
+#     def __init__(
+#         self,
+#         proof_gen_clients: List[AsyncOpenAI],
+#         proof_gen_models: List[str],
+#         *args,
+#         num_max_samples_per_trial: int=1,
+#         temperature: Optional[float]=None,
+#         max_tokens: int=NOT_GIVEN,
+#         **kwargs
+#     ) -> None:
+#         super().__init__(None, None, proof_gen_clients, proof_gen_models, *args, num_max_samples_per_trial=num_max_samples_per_trial, temperature=temperature, max_tokens=max_tokens, **kwargs)
         
-    # async def generate_statement_async(self, conditions: int) -> str:
-    #     return self.statements[conditions]
+#     # async def generate_statement_async(self, conditions: int) -> str:
+#     #     return self.statements[conditions]
 
-    async def generate_proofs_async(self, init_state: GoalState, server: PersistentServer) -> List[Tuple[str, str]]:
-        for (client, model) in zip(self.proof_gen_clients, self.proof_gen_models):
-            proof = await self.generate_one_proof_async(
-                init_state=init_state,
-                server=server,
-                client=client,
-                model=model
-            )
-            if proof is not None:
-                return [(model, proof)]
-        return None
+#     async def generate_proofs_async(self, init_state: GoalState, server: PersistentServer) -> List[Tuple[str, str]]:
+#         for _ in range(self.num_max_samples_per_trial):
+#             for (client, model) in zip(self.proof_gen_clients, self.proof_gen_models):
+#                 proof = await self.generate_one_proof_async(
+#                     init_state=init_state,
+#                     server=server,
+#                     client=client,
+#                     model=model
+#                 )
+#                 if proof is not None:
+#                     return [(model, proof)]
+#         return None
 
-class MultipleProvers:
-    def __init__(
-        self,
-        clients: List[AsyncOpenAI],
-        models: List[str],
-        temperature: Optional[float]=1.0,
-        max_tokens: int=-1,
-        top_p: float=0.95,
-        try_num: int=1,
-        extra_body: Optional[Dict] = None
-    ):
-        assert len(clients) == len(models), f'len(clients)={len(clients)}, len(models)={len(models)}'
-        self.provers = [
-            VersatileLLMWholeProofGenerationAgent(
-                client=c,
-                model=m,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                extra_body=extra_body
-            ) for c, m in zip(clients, models)
-        ]
-        self.try_num = try_num
-        self.last_token_usage = C.defaultdict(int)
-    
-    async def prove_async(
-        self,
-        server: PersistentServer,
-        formal_statement: str,
-        load_statement: str,
-        intros: List[str],
-        header: str,
-        early_stop: bool,
-        tag: str='',
-    ) -> Tuple[List[str], List[str]]: # [(model, proof), ...]
-        self.last_token_usage.clear()
-        models = []
-        proofs = []
-        
-        for _ in range(self.try_num):
-            for prover in self.provers:
-                prover.token_usage.clear()
-                models.append(prover.model)
-                try:
-                    init_state = await server.load_statement_async(
-                        statement=load_statement,
-                        intros=intros,
-                        header=header
-                    )
-                    result = await prover.search_async(
-                        server=server,
-                        init_state=init_state,
-                        formal_statement=formal_statement,
-                        tag=tag,
-                    )
-                    for k, v in prover.token_usage.items():
-                        self.last_token_usage[k] += v
-                    if result.success:
-                        assert len(result.proof) == 1 and result.proof[0][0] == 0
-                        proofs.append(result.proof[0][-1])
-                        if early_stop:
-                            return models, proofs
-                    else:
-                        proofs.append(None)
-                except Exception as e:
-                    logger.debug(f'prove_async({tag}): failed due to exception {repr(e)}')
-                    proofs.append(None)
-        return models, proofs
 
 class ProblemEvaluator(MultipleProvers):
     def __init__(
