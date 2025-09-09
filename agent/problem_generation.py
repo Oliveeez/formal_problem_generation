@@ -25,6 +25,7 @@ from common.pantograph.parsing_server import PersistentParsingServer
 from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerationProcess, Goal, GoalState, TacticDraft, Variable, ProblemGenerationStepCategory
 from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft, parse_idents, decompose_statement, proof_decompose, generate_submission_name, is_deductive_transition, remove_spaces
 from agent.proof_generation import ProofSearchResult, ProofSearchAgent, VersatileLLMWholeProofGenerationAgent
+from agent.statement_autoformalization import VersatileLLMStatementAutoformalizationAgent
 
 class ProblemGenerationAgent:
     """
@@ -763,11 +764,11 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
 
     @abstractmethod
     async def gen_step_async(
-            self,
-            state: GoalState,
-            step_history: List[ProblemGenerationStep],
-            conditions: Any,
-        ) -> ProblemGenerationStep:
+        self,
+        state: GoalState,
+        step_history: List[ProblemGenerationStep],
+        conditions: Any,
+    ) -> ProblemGenerationStep:
         """
         Given the current problem state and conditions, generate the next step for exploration.
         The returned `new_contexts` field should be empty (`None` for submitting and `[]` for introducing / deducing)
@@ -1958,10 +1959,10 @@ class ProblemFalsifier(MultipleProvers):
 class AutoformalizedProblemGenerationAgent(LLMWholeProblemGenerationAgent):
     def __init__(
         self,
-        autoformalization_client: AsyncOpenAI,
-        autoformalization_model: str,
-        proof_gen_clients: List[AsyncOpenAI],
-        proof_gen_models: List[str],
+        stmt_autoformalization_client: AsyncOpenAI,
+        stmt_autoformalization_model: str,
+        whole_proof_gen_clients: List[AsyncOpenAI],
+        whole_proof_gen_models: List[str],
         formal_statement_pool: List[str],
         *args,
         num_max_samples_per_trial: int=1,
@@ -1973,12 +1974,19 @@ class AutoformalizedProblemGenerationAgent(LLMWholeProblemGenerationAgent):
         if len(args) > 0 or len(kwargs) > 0:
             logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
         
-        assert len(proof_gen_clients) > 0 and len(proof_gen_clients) == len(proof_gen_models)
+        assert len(whole_proof_gen_clients) > 0 and len(whole_proof_gen_clients) == len(whole_proof_gen_models)
         
-        self.autoformalization_client = autoformalization_client
-        self.autoformalization_model = autoformalization_model
-        self.proof_gen_clients = proof_gen_clients
-        self.proof_gen_models = proof_gen_models
+        self.stmt_autoformalizer = VersatileLLMStatementAutoformalizationAgent(
+            client=stmt_autoformalization_client,
+            model_name=stmt_autoformalization_model
+        )
+        self.provers = [
+            VersatileLLMWholeProofGenerationAgent(
+                client=client,
+                model_name=model_name
+            ) for (client, model_name) in zip(whole_proof_gen_clients, whole_proof_gen_models)
+        ]
+        
         self.num_max_samples_per_trial = num_max_samples_per_trial
         self.temperature = temperature
         self.max_tokens = max_tokens

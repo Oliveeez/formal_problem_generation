@@ -884,8 +884,8 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
                     n=1,
                     extra_body=self.extra_body
                 ))
-            if response.choices[0].finish_reason == 'length':
-                logger.warning(f'Generation length exceeded: [{response.choices[0].message.content}]')
+            # if response.choices[0].finish_reason == 'length':
+            #     logger.warning(f'Generation length exceeded: [{response.choices[0].message.content}]')
             self.token_usage['completion_tokens'] += response.usage.completion_tokens
             self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
             # breakpoint()
@@ -1146,14 +1146,14 @@ class VersatileLLMWholeProofGenerationAgent(LLMWholeProofGenerationAgent):
         model: str,
         temperature: Optional[float]=None,
         max_tokens: int=-1,
-        top_p: float=0.95,
+        top_p: Optional[float]=None,
         extra_body: Optional[Dict]=None
     ) -> None:
         super().__init__(client, model, temperature, max_tokens, top_p, extra_body)
         
         model_name = self.model[:-1] if self.model.endswith('/') else self.model
         model_name = model_name.split('/')[-1].lower()
-        for (k, v) in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS:
+        for (k, v) in self.MODEL_STR_TO_CLS:
             if k in model_name:
                 # assert all(kk not in model_name for (kk, _) in VersatileLLMWholeProofGenerationAgent.MODEL_STR_TO_CLS if kk != k), f'Ambiguous model: {model_name}'
                 logger.info(f'Dispatching {v.__name__} to {model_name}')
