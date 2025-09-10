@@ -69,7 +69,7 @@ def main(
     ]
     
     clients = []
-    for _ in n_servers:
+    for _ in range(n_servers):
         clients.append(
             AsyncOpenAI(
                 base_url=base_url,
