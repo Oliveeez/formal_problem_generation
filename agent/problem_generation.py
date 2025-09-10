@@ -1623,6 +1623,7 @@ class ProblemEvaluator(MultipleProvers):
         self,
         server: PersistentServer,
         result: ProblemGenerationProcess,
+        early_stop_if_falsified: bool,
         tag: str='',
     ) -> Dict:
         variables = []
@@ -1661,13 +1662,14 @@ class ProblemEvaluator(MultipleProvers):
             tag=tag
         )
         
-        if any(p is not None for p in proofs):
-            return {
-                'falsify_provers': provers,
-                'falsify_proofs': proofs,
-                'completion_tokens': self.last_token_usage['completion_tokens'],
-                'prompt_tokens': self.last_token_usage['prompt_tokens'],
-            }
+        eval_result = {
+            'falsify_provers': provers,
+            'falsify_proofs': proofs,
+            'falsify_token_usage': self.last_token_usage
+        }
+    
+        if proofs[-1] is not None and early_stop_if_falsified:
+            return eval_result
         
         if self.kc_estimation_mode != 'none':
             provers, proofs = await self.prove_async(
@@ -1681,20 +1683,14 @@ class ProblemEvaluator(MultipleProvers):
             )
             assert len(provers) == len(proofs)
             
-            return {
+            return eval_result | {
                 'provers': provers,
                 'proofs' : proofs,
                 'KC': min([len(remove_spaces(remove_comments(p))) for p in proofs if p is not None] + [float('inf')]),
-                'completion_tokens': self.last_token_usage['completion_tokens'],
-                'prompt_tokens': self.last_token_usage['prompt_tokens'],
+                'prove_token_usage': self.last_token_usage
             }
         else:
-            return {
-                'falsify_provers': provers,
-                'falsify_proofs': proofs,
-                'completion_tokens': self.last_token_usage['completion_tokens'],
-                'prompt_tokens': self.last_token_usage['prompt_tokens'],
-            }
+            return eval_result
 
 class ProblemFalsifier(MultipleProvers):
     def __init__(

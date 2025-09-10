@@ -37,10 +37,12 @@ from agent.problem_generation import ProblemEvaluator
 async def async_worker(
     result: ProblemGenerationProcess,
     key: Any,
-    agent: ProblemEvaluator,
+    available_agents: List[ProblemEvaluator],
     available_servers: List[PersistentServer],
     finished_list: Dict,
+    early_stop_if_falsified: bool
 ) -> None:
+    agent = available_agents.pop()
     server = available_servers.pop()
     server.tag = str(key)
     try:
@@ -48,13 +50,13 @@ async def async_worker(
         eval_result = await agent.evaluate_async(
             server=server,
             result=result,
+            early_stop_if_falsified=early_stop_if_falsified,
             tag=str(key)
         )
-        if any([p is not None for p in eval_result.get('falsify_proofs', [])]):
-            assert eval_result['falsify_proofs'][-1] is not None, 'Unexpected behavior'
+        if eval_result.get('falsify_proofs', [None])[-1] is not None:
+            # assert eval_result['falsify_proofs'][-1] is not None, 'Unexpected behavior'
             logger.info(f'async_worker({key}): Falsified by {eval_result["falsify_provers"][-1]}')
-        else:
-            logger.info(f'async_worker({key}): Estimated KC = {eval_result.get("KC", float("inf"))}')
+        logger.info(f'async_worker({key}): Estimated KC = {eval_result.get("KC", float("inf"))}')
         result.metainfo['eval_result'] = eval_result
         logger.info(f'async_worker({key}): finished.')
     except Exception as e:
@@ -65,6 +67,7 @@ async def async_worker(
         finished_list[key] = result
         server.tag = ''
         available_servers.insert(0, server)
+        available_agents.insert(0, agent)
 
 def main(
     load_path: str,
@@ -79,6 +82,7 @@ def main(
     try_num: int=4,
     num_concurrency: int=12,
     kc_estimation_mode: str='none',
+    early_stop_if_falsified: bool=False,
     debug: bool=False,
 ):
     saved_args = {**locals()}
@@ -92,12 +96,20 @@ def main(
         logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
     logger.add(osp.join(log_root, log_prefix+now+'.log'), level='DEBUG')
     logger.info(f'Evaluating problem generator with hyperparams: {saved_args}')
+    assert num_concurrency % len(proof_gen_base_urls) == 0
     assert len(proof_gen_base_urls) == len(proof_gen_api_keys), f'{len(proof_gen_base_urls)} != {len(proof_gen_api_keys)}'
     assert len(proof_gen_api_keys) == len(proof_gen_model_names), f'{len(proof_gen_api_keys)} != {len(proof_gen_model_names)}'
     assert kc_estimation_mode.lower() in ['none', 'early_stop', 'full'], f'kc_estimation_mode={kc_estimation_mode}'
     
     with open(load_path, 'rb') as f:
-        conditions_sampled, finished_list = pickle.load(f)
+        load_results = pickle.load(f)
+        try:
+            conditions_sampled, finished_list = load_results
+        except:
+            finished_list = load_results
+            conditions_sampled = list(range(len(finished_list)))
+            for i in conditions_sampled:
+                assert isinstance(finished_list[i], object)
     
     available_servers = [
         PersistentServer(
@@ -118,7 +130,7 @@ def main(
         ) for (proof_gen_base_url, proof_gen_api_key) in zip(proof_gen_base_urls, proof_gen_api_keys)
     ]
     
-    agents = [
+    available_agents = [
         ProblemEvaluator(
             clients=clients,
             models=models,
@@ -127,7 +139,7 @@ def main(
             top_p=top_p,
             try_num=try_num,
             kc_estimation_mode=kc_estimation_mode,
-        ) for clients, models in rotate(proof_gen_clients, proof_gen_model_names)
+        ) for _ in range(num_concurrency // len(proof_gen_clients)) for clients, models in rotate(proof_gen_clients, proof_gen_model_names)
     ]
 
     tasks = [
@@ -151,9 +163,10 @@ def main(
                     async_worker(
                         result=finished_list[idx],
                         key=idx,
-                        agent=agents[i % len(agents)],
+                        available_agents=available_agents,
                         available_servers=available_servers,
                         finished_list=finished_list,
+                        early_stop_if_falsified=early_stop_if_falsified,
                     )
                 )
             )
