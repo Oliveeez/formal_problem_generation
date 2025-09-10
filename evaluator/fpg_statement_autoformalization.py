@@ -90,7 +90,7 @@ def main(
         server = available_servers.pop()
         agent = available_agents.pop()
         informal_datapoint = data_chosen[tag_i]
-        informal_statement = informal_datapoint['informal_problem'].strip() + ' Prove that the answer is "' + informal_datapoint['informal_answer'].strip() + '". '
+        informal_statement = agent.format_statement(informal_problem=informal_datapoint['informal_problem'].strip(), informal_answer=informal_datapoint['informal_answer'].strip())
         header = None
         stmt_code = ''
         try:

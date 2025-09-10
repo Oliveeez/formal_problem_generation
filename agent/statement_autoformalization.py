@@ -61,18 +61,28 @@ class LLMStatementAutoformalizationAgent(StatementAutoformalizationAgent):
         self.top_k = top_k
         self.top_p = top_p
 
+    @staticmethod
+    @abstractmethod
+    def format_statement(
+        informal_problem: str,
+        informal_answer: str
+    ) -> str:
+        """
+        Format an informal problem and its answer into an informal statement
+        """
+
+    @staticmethod
     @abstractmethod
     def format_prompt(
-        self,
         informal_statement: str,
     ) -> List[Dict[str, str]]:
         """
         Generate a prompt for the autoformalizer
         """
 
+    @staticmethod
     @abstractmethod
     def parse_result(
-        self,
         response: str
     ) -> Tuple[str, str]:
         """
@@ -160,13 +170,20 @@ class Goedel_LLMStatementAutoformalizationAgent(LLMStatementAutoformalizationAge
     ) -> None:
         super().__init__(client, model_name, temperature, max_tokens, top_k, top_p, *args, **kwargs)
 
+    @staticmethod
+    def format_statement(
+        informal_problem: str,
+        informal_answer: str
+    ) -> str:
+        return informal_problem.strip() + ' Prove that the answer is "' + informal_answer.strip() + '". '
+
+    @staticmethod
     def format_prompt(
-        self,
         informal_statement: str,
     ) -> List[Dict[str, str]]:
         user_prompt_content = (
             f"Please autoformalize the following natural language problem statement in Lean 4. "
-            f"Use the following theorem name: {self.THEOREM_NAME}\n"
+            f"Use the following theorem name: {Goedel_LLMStatementAutoformalizationAgent.THEOREM_NAME}\n"
             f"The natural language statement is: \n"
             f"{informal_statement}"
             f"Think before you provide the lean statement."
@@ -175,17 +192,99 @@ class Goedel_LLMStatementAutoformalizationAgent(LLMStatementAutoformalizationAge
             {"role": "user", "content": user_prompt_content},
         ]
 
+    @staticmethod
     def parse_result(
-        self,
         response: str
     ) -> Tuple[str, str]:
         body = response.split('</think>')[-1]
         code = extract_code(body)
         
-        p = remove_comments(code).strip().replace('\nlemma ', '\ntheorem ').replace('\nexample ', '\ntheorem test_problem')
-        start_pos = p.find('theorem test_problem')
+        p = remove_comments(code).strip()
+        start_pos = p.find(f'theorem {Goedel_LLMStatementAutoformalizationAgent.THEOREM_NAME}')
         assert start_pos != -1, 'Start pos not found'
-        intro_code, stmt_code = p[:start_pos], p[start_pos+len('theorem test_problem'):]
+        intro_code, stmt_code = p[:start_pos], p[start_pos+len(f'theorem {Goedel_LLMStatementAutoformalizationAgent.THEOREM_NAME}'):]
+        
+        # Parse header
+        import_list = []
+        open_scoped_list = []
+        open_list = []
+        option_list = []
+
+        for l in intro_code.splitlines():
+            if len(l.strip()) == 0:
+                continue
+            elif l.startswith('import '):
+                import_list.append(l[len('import '):].strip())
+            elif l.startswith('open scoped '):
+                for t in l[len('open scoped '):].strip().split():
+                    open_scoped_list.append(t)
+            elif l.startswith('open '):
+                for t in l[len('open '):].strip().split():
+                    open_list.append(t)
+            elif l.startswith('set_option '):
+                option_list.append(l[len('set_option '):].strip())
+            else:
+                logger.debug('Neglecting unexpected line in intro code: ' + l)
+        
+        header = ''
+        if len(open_scoped_list):
+            header += 'open scoped ' + ' '.join(t for t in open_scoped_list) + '\n'
+        if len(open_list):
+            header += 'open ' + ' '.join(t for t in open_list) + '\n'
+        if len(option_list):
+            header += '\n'.join('set_option ' + t for t in option_list) + '\n'
+
+        # Parse statement
+        stmt_code = replace_sorry('example' + stmt_code)
+        assert stmt_code.endswith(':= sorry'), f'stmt_code={[stmt_code]}'
+        
+        return header, stmt_code
+
+class Kimina_LLMStatementAutoformalizationAgent(LLMStatementAutoformalizationAgent):
+    THEOREM_NAME = "my_favorite_theorem"
+    
+    def __init__(
+        self,
+        client: AsyncOpenAI,
+        model_name: str,
+        temperature: Optional[float]=0.6,
+        max_tokens: int=NOT_GIVEN,
+        top_k: Optional[int]=None,
+        top_p: Optional[float]=0.95,
+        *args,
+        **kwargs
+    ) -> None:
+        super().__init__(client, model_name, temperature, max_tokens, top_k, top_p, *args, **kwargs)
+
+    @staticmethod
+    def format_statement(
+        informal_problem: str,
+        informal_answer: str
+    ) -> str:
+        return informal_problem.strip() + ' The answer is ' + informal_answer.strip() + '.'
+
+    @staticmethod
+    def format_prompt(
+        informal_statement: str,
+    ) -> List[Dict[str, str]]:
+        prompt = f"Please autoformalize the following problem in Lean 4 with a header. Use the following theorem names: {Kimina_LLMStatementAutoformalizationAgent.THEOREM_NAME}.\n\n" + informal_statement
+        messages = [
+            {"role": "system", "content": "You are an expert in mathematics and Lean 4."},
+            {"role": "user", "content": prompt}
+        ]
+        return messages
+
+    @staticmethod
+    def parse_result(
+        response: str
+    ) -> Tuple[str, str]:
+        body = response.split('</think>')[-1]
+        code = extract_code(body)
+        
+        p = remove_comments(code).strip()
+        start_pos = p.find(f'theorem {Kimina_LLMStatementAutoformalizationAgent.THEOREM_NAME}')
+        assert start_pos != -1, 'Start pos not found'
+        intro_code, stmt_code = p[:start_pos], p[start_pos+len(f'theorem {Kimina_LLMStatementAutoformalizationAgent.THEOREM_NAME}'):]
         
         # Parse header
         import_list = []
@@ -226,6 +325,7 @@ class Goedel_LLMStatementAutoformalizationAgent(LLMStatementAutoformalizationAge
 class VersatileLLMStatementAutoformalizationAgent(LLMStatementAutoformalizationAgent):
     MODEL_STR_TO_CLS: List[Tuple[str, LLMStatementAutoformalizationAgent]] = [
         ('goedel', Goedel_LLMStatementAutoformalizationAgent),
+        ('kimina', Kimina_LLMStatementAutoformalizationAgent)
     ]
     
     def __init__(

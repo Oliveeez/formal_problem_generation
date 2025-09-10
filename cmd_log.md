@@ -502,6 +502,7 @@ python -m evaluator.fpg_whole_statement_generation_starified \
 ```
 ## Baseline - Autoformalization-based Problem Generation
 ```shell
+# Goedel-32B
 export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so"
 ldd `which python`
 export TASK_QUEUE_ENABLE=2
@@ -541,19 +542,40 @@ do
         --num_concurrency 1
 done
 
-for dataset in PromptCoT-DS
+
+# Kimina-7B
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so"
+ldd `which python`
+export TASK_QUEUE_ENABLE=2
+for i_experiment in 0 1 2 3
+do
+    echo $i_experiment
+    export ASCEND_RT_VISIBLE_DEVICES=$i_experiment;
+    python -m vllm.entrypoints.openai.api_server \
+        --model /home/ma-user/local_cache/AI-MO/Kimina-Autoformalizer-7B \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key statement_autoformalization \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 \
+        --additional-config '{"ascend_scheduler_config":{}}' &
+done
+
+for dataset in PromptCoT-DS PromptCoT-QwQ ScaleQuest-Math
 do
     echo "Processing ${dataset}..."
     ulimit -s unlimited;
     python -m evaluator.fpg_statement_autoformalization \
-        --log_root output/autoformalization_pg/ \
-        --base_url http://0.0.0.0:37213/v1 \
+        --log_root output/autoformalization_pg_kimina7b/ \
+        --base_url http://0.0.0.0:37210/v1 \
         --api_key statement_autoformalization \
-        --model_name "/home/ma-user/local_cache/Goedel-LM/Goedel-Formalizer-V2-8B" \
-        --n_servers 1 \
+        --model_name "/home/ma-user/local_cache/AI-MO/Kimina-Autoformalizer-7B" \
+        --n_servers 4 \
         --load_path /cache/data/fpg_informal_baselines/${dataset}.processed.jsonl \
         --num_generation_attempt 5000 \
-        --num_concurrency 1
+        --num_concurrency 96
 done
 ```
 
