@@ -505,21 +505,44 @@ python -m evaluator.fpg_whole_statement_generation_starified \
 export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so"
 ldd `which python`
 export TASK_QUEUE_ENABLE=2
+device_groups=("0,1" "2,3" "4,5" "6,7")
+port=37210
+for group in "${device_groups[@]}"
+do
+    echo "Port: $port, NPU: $group"
+    export ASCEND_RT_VISIBLE_DEVICES=$group;
+    python -m vllm.entrypoints.openai.api_server \
+        --model /cache/ckpts/Goedel-Formalizer-V2-32B \
+        --port $port \
+        --dtype bfloat16 \
+        --tensor_parallel_size 2 \
+        --api-key statement_autoformalization \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 \
+        --additional-config '{"ascend_scheduler_config":{}}' &
+    port=$((port + 1))
+done
 
-export ASCEND_RT_VISIBLE_DEVICES=3;
-python -m vllm.entrypoints.openai.api_server \
-    --model /home/ma-user/local_cache/Goedel-LM/Goedel-Formalizer-V2-8B \
-    --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
-    --dtype bfloat16 \
-    --api-key statement_autoformalization \
-    --trust-remote-code \
-    --enable-prefix-caching \
-    --disable-log-requests \
-    --max-model-len 8192 \
-    --additional-config '{"ascend_scheduler_config":{}}'
-
+# Run experiment
+for dataset in PromptCoT-DS PromptCoT-QwQ ScaleQuest-Math
+do
+    echo "Processing ${dataset}..."
+    # ulimit -s unlimited;
+    # python -m evaluator.fpg_statement_autoformalization \
+    #     --log_root output/autoformalization_pg/ \
+    #     --base_url http://0.0.0.0:37210/v1 \
+    #     --api_key statement_autoformalization \
+    #     --model_name "/cache/ckpts/Goedel-Formalizer-V2-32B" \
+    #     --n_servers 4 \
+    #     --load_path /cache/data/fpg_informal_baselines/${dataset}.processed.jsonl \
+    #     --num_generation_attempt 5000 \
+    #     --num_concurrency 96
+done
 ```
 
+# Evaluation
 ## Evaluation: Falsify & KC
 ```shell
 export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher

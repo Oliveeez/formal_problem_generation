@@ -10,6 +10,7 @@ import json
 import regex as re
 import itertools as I
 import collections as C
+import random
 
 from loguru import logger
 import networkx as nx
@@ -1819,59 +1820,158 @@ class ProblemFalsifier(MultipleProvers):
             return falsify_proofs[-1]
 
 
-class AutoformalizedProblemGenerationAgent(LLMWholeProblemGenerationAgent):
+class AutoformalizedProblemGenerationAgent(ProblemGenerationAgent):
     def __init__(
         self,
-        stmt_autoformalization_client: AsyncOpenAI,
-        stmt_autoformalization_model: str,
-        whole_proof_gen_clients: List[AsyncOpenAI],
-        whole_proof_gen_models: List[str],
-        formal_statement_pool: List[str],
+        stmt_autoformalizer: VersatileLLMStatementAutoformalizationAgent,
+        provers: MultipleProvers,
+        formal_statement_pool: List[Dict],
         *args,
-        num_max_samples_per_trial: int=1,
-        temperature: Optional[float]=None,
-        max_tokens: int=NOT_GIVEN,
         **kwargs
     ) -> None:
         super().__init__()
         if len(args) > 0 or len(kwargs) > 0:
             logger.warning(f'Redundant arguments for {type(self)}: {args} {kwargs}')
         
-        assert len(whole_proof_gen_clients) > 0 and len(whole_proof_gen_clients) == len(whole_proof_gen_models)
+        self.stmt_autoformalizer = stmt_autoformalizer
+        self.provers = provers
+        self.formal_statement_pool = formal_statement_pool
+
+    def format_informal_statement(self, d: Dict[str, str]):
+        pass
+
+    async def generate_async(
+            self,
+            server: PersistentServer,
+            idx: Optional[int]=None,
+            decompose_steps: bool=False,
+            reassemble_trajectory: bool=False,
+            tag: str='',
+            verbose: bool=False,
+        ) -> ProblemGenerationProcess:
+        """
+        Autoregressive problem generation.
+        """
+        # Initialize
+        self.token_usage = C.defaultdict(list)
+        assert server.is_automatic(), "Search must be run in automatic mode"
+        if idx is None:
+            idx = random.randint(0, len(self.formal_statement_pool)-1)
+        informal_datapoint = self.formal_statement_pool[idx]
+        informal_statement = self.format_informal_statement(self, informal_datapoint)
         
-        self.stmt_autoformalizer = VersatileLLMStatementAutoformalizationAgent(
-            client=stmt_autoformalization_client,
-            model_name=stmt_autoformalization_model
+        time_start = time.time()
+        log = logger.info if verbose else logger.debug
+        
+        result = ProblemGenerationProcess(
+            informal_problem='',
+            informal_answer='',
+            informal_solution='',
+            header=None,
+            formal_statement='',
+            formal_solution_draft=None,
+            formal_proofs=[],
+            steps=[],
+            dependencies=[],
+            trajectory=[],
+            metainfo={**informal_datapoint} | {'informal_datapoint_idx': idx}
         )
-        self.provers = [
-            VersatileLLMWholeProofGenerationAgent(
-                client=client,
-                model_name=model_name
-            ) for (client, model_name) in zip(whole_proof_gen_clients, whole_proof_gen_models)
-        ]
         
-        self.num_max_samples_per_trial = num_max_samples_per_trial
-        self.temperature = temperature
-        self.max_tokens = max_tokens
+        # Search
+        try:
+            # assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
+            try:
+                load_header, formal_statement = self.stmt_autoformalizer.autoformalize_async(
+                    informal_statement=informal_statement,
+                    server=server,
+                    tag=tag
+                )
+                self.token_usage['stmt_autoformalizer.autoformalize'] = self.stmt_autoformalizer.last_token_usage
+                assert formal_statement.startswith('example') and formal_statement.endswith('\n:= sorry')
+                
+                variables = []
+                context, target = decompose_statement(formal_statement)
+                for declaration in context:
+                    if declaration[0] == '[':
+                        try:
+                            var_names, var_type = declaration[1:-1].split(':', 1)
+                        except ValueError:
+                            var_names = '_'
+                            var_type = declaration[1:-1]
+                        for name in var_names.strip().split():
+                            # print(name, var_type)
+                            variables.append((name.strip(), var_type))
+                    else:
+                        assert '✝' not in declaration, f'declaration: {declaration}'
+                        try:
+                            var_names, var_type = declaration[1:-1].split(':', 1)
+                        except ValueError:
+                            var_names = declaration[1:-1]
+                            var_type = None
+                        for name in var_names.strip().split():
+                            if '✝' in name:
+                                name = '_'
+                            variables.append((name.strip(), var_type))
 
-    @abstractmethod
-    def format_autoformalization_prompt(self, condition: Any) -> str:
-        pass
+                load_statement = (('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target
+                init_state = await server.load_statement_async(
+                    statement=load_statement,
+                    intros=[v[0] for v in variables],
+                    header=load_header
+                )
+                result.header = load_header
+                result.formal_statement = formal_statement
+            except Exception as e:
+                raise RuntimeError(f'Statement generation: {repr(e)}')
+            
+            # formal_proofs = await self.generate_proofs_async(init_state, server)
+            self.provers.last_token_usage = C.defaultdict(list)
+            models, proofs = await self.provers.prove_async(
+                server=server,
+                formal_statement=result.formal_statement,
+                load_statement=load_statement,
+                intros=[v[0] for v in variables],
+                header=result.header,
+                early_stop=True,
+                tag=tag
+            )
 
-    @abstractmethod
-    def parse_autoformalization_result(self, output: str) -> str:
-        pass
-    
-    async def generate_statement_async(self, conditions: Any) -> str:
-        # Generate and parse
-        response: ChatCompletion = (await self.statement_gen_client.chat.completions.create(
-            model=self.statement_gen_model,
-            messages=self.format_statement_gen_prompt(conditions),
-            max_tokens=self.max_tokens,
-            stream=False,
-            temperature=self.temperature,
-            n=1,
-        ))
-        # TODO: Token usage
-        return self.parse_statement_gen_result(response.choices[0].message.content)
-    
+            self.token_usage['provers.prove'] = self.provers.last_token_usage
+            self.provers.last_token_usage = C.defaultdict(list)
+            # formal_proofs.sort(key=lambda s : len(s[-1]))   # Ascending order of proof length (Kolmogorov Complexity)
+            # Assuming formal_proofs[-1][-1] is the proof
+            assert proofs[-1] is not None, 'Proof generation failed.'
+            logger.info(f'generate_async({tag}): Proven by {models[-1]}')
+            
+            result.formal_solution_draft = proofs[-1]
+            
+            if decompose_steps:
+                deductive_steps, deductive_states = await self.decompose_deductive_steps_async(
+                    result=result,
+                    server=server,
+                    tag=tag,
+                )
+                
+                if deductive_steps is not None:
+                    is_valid = await self.validate_deductive_steps_async(
+                        result=result,
+                        deductive_steps=deductive_steps,
+                        deductive_states=deductive_states,
+                        server=server,
+                        tag=tag,
+                        reassemble_trajectory=reassemble_trajectory
+                    )
+            
+            result.metainfo['proving_results'] = (models, proofs)
+            logger.info(f'generate_async({tag}): generation succeeded.')
+        except Exception as e:
+            logger.debug(f'generate_async({tag}): generation failed due to traceback: {traceback.format_exc()}')
+            logger.warning(f'generate_async({tag}): generation failed due to {repr(e)}')
+            
+        await self.reset_async()
+
+        result.metainfo['token_usage'] = self.token_usage
+        result.metainfo['time_consumption'] = time.time() - time_start
+        result.metainfo = json.dumps(result.metainfo)
+        self.token_usage = C.defaultdict(list)
+        return result

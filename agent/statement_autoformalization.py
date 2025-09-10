@@ -52,7 +52,7 @@ class LLMStatementAutoformalizationAgent(StatementAutoformalizationAgent):
         **kwargs
     ) -> None:
         super().__init__(*args, **kwargs)
-        self.token_usage = C.defaultdict(int)
+        self.last_token_usage = C.defaultdict(list)
         
         self.client = client
         self.model_name = model_name
@@ -84,8 +84,9 @@ class LLMStatementAutoformalizationAgent(StatementAutoformalizationAgent):
         informal_statement: str,
         server: Optional[PersistentServer],
         tag: str=''
-    ) -> Optional[Tuple[str, str]]:
+    ) -> Tuple[Optional[str], Optional[str]]:
         breakpoint()
+        self.last_token_usage = C.defaultdict(list)
         messages = self.format_prompt(informal_statement=informal_statement)
         try:
             response: ChatCompletion = (await self.client.chat.completions.create(
@@ -100,9 +101,9 @@ class LLMStatementAutoformalizationAgent(StatementAutoformalizationAgent):
             ))
         except Exception as e:
             logger.warning(f'autoformalize_async({tag}): Exception {repr(e)}')
-            return None
-        self.token_usage['completion_tokens'] += response.usage.completion_tokens
-        self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
+            return None, None
+        self.last_token_usage['completion_tokens'].append(response.usage.completion_tokens)
+        self.last_token_usage['prompt_tokens'].append(response.usage.prompt_tokens)
         breakpoint()
         
         try:
@@ -142,7 +143,7 @@ class LLMStatementAutoformalizationAgent(StatementAutoformalizationAgent):
                 assert not init_state.is_solved, f'init_state={[str(init_state)]}'
         except Exception as e:
             logger.warning(f'autoformalize_async({tag}): Statement parsing/validation failed due to {repr(e)}')
-            return None
+            return None, None
         
         breakpoint()
         return header, stmt_code
