@@ -44,10 +44,10 @@ def main(
     log_prefix = 'statement_autoformalization'+'.'
 
     os.makedirs(log_root, exist_ok=True)
-    # if num_concurrency > 1:
-    #     logger.remove()
-    #     logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
-    #     logger.add(osp.join(log_root, log_prefix+now+'.log'), level='DEBUG')
+    if num_concurrency > 1:
+        logger.remove()
+        logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
+        logger.add(osp.join(log_root, log_prefix+now+'.log'), level='DEBUG')
     logger.info(f'Evaluating problem generator with hyperparams: {saved_args}')
 
     with open(load_path, 'r') as f:
@@ -90,7 +90,7 @@ def main(
         server = available_servers.pop()
         agent = available_agents.pop()
         informal_datapoint = data_chosen[tag_i]
-        informal_statement = informal_datapoint['informal_problem'].strip() + ' Show that the answer is "' + informal_datapoint['informal_answer'].strip() + '".'
+        informal_statement = informal_datapoint['informal_problem'].strip() + ' Prove that the answer is "' + informal_datapoint['informal_answer'].strip() + '". '
         header = None
         stmt_code = ''
         try:
@@ -102,7 +102,7 @@ def main(
             )
             if stmt_code is not None:
                 logger.opt(colors=True).info(f'<green>generate_worker({tag_i}): generation succeeded.</green>')
-                logger.info(informal_statement + '\n' + "" if header is None else (header.rstrip() + NEWLINE) + stmt_code)
+                logger.info(informal_statement + '\n' + ("" if header is None else (header.rstrip() + NEWLINE)) + stmt_code)
         except Exception as e:
             logger.info(f'generate_worker({tag_i}): generation failed due to: {repr(e)}\n{traceback.format_exc()}')
         finally:
