@@ -44,16 +44,16 @@ def main(
     log_prefix = 'statement_autoformalization'+'.'
 
     os.makedirs(log_root, exist_ok=True)
-    if num_concurrency > 1:
-        logger.remove()
-        logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
-        logger.add(osp.join(log_root, log_prefix+now+'.log'), level='DEBUG')
+    # if num_concurrency > 1:
+    #     logger.remove()
+    #     logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
+    #     logger.add(osp.join(log_root, log_prefix+now+'.log'), level='DEBUG')
     logger.info(f'Evaluating problem generator with hyperparams: {saved_args}')
 
     with open(load_path, 'r') as f:
         data = [json.loads(l) for l in f.readlines()]
     data_chosen = random.sample(data, num_generation_attempt)
-    finished = [None for _ in random.choice(data_chosen)]
+    finished = [None for _ in data_chosen]
     logger.info(f"Created {len([v for v in finished if v is None])} tasks")
         
     available_servers = [
@@ -102,7 +102,7 @@ def main(
             )
             if stmt_code is not None:
                 logger.opt(colors=True).info(f'<green>generate_worker({tag_i}): generation succeeded.</green>')
-                logger.info("" if header is None else (header.rstrip() + NEWLINE) + stmt_code)
+                logger.info(informal_statement + '\n' + "" if header is None else (header.rstrip() + NEWLINE) + stmt_code)
         except Exception as e:
             logger.info(f'generate_worker({tag_i}): generation failed due to: {repr(e)}\n{traceback.format_exc()}')
         finally:

@@ -85,7 +85,6 @@ class LLMStatementAutoformalizationAgent(StatementAutoformalizationAgent):
         server: Optional[PersistentServer],
         tag: str=''
     ) -> Tuple[Optional[str], Optional[str]]:
-        breakpoint()
         self.last_token_usage = C.defaultdict(list)
         messages = self.format_prompt(informal_statement=informal_statement)
         try:
@@ -104,11 +103,10 @@ class LLMStatementAutoformalizationAgent(StatementAutoformalizationAgent):
             return None, None
         self.last_token_usage['completion_tokens'].append(response.usage.completion_tokens)
         self.last_token_usage['prompt_tokens'].append(response.usage.prompt_tokens)
-        breakpoint()
         
         try:
             header, stmt_code = self.parse_result(response.choices[0].message.content)
-            assert stmt_code.startswith('example') and stmt_code.endswith('\n:= sorry')
+            assert stmt_code.startswith('example') and stmt_code.endswith(':= sorry')
             
             if server is not None:
                 variables = []
@@ -134,7 +132,6 @@ class LLMStatementAutoformalizationAgent(StatementAutoformalizationAgent):
                             if '✝' in name:
                                 name = '_'
                             variables.append((name.strip(), var_type))
-                breakpoint()
                 init_state = await server.load_statement_async(
                     statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
                     intros=[v[0] for v in variables],
@@ -145,7 +142,6 @@ class LLMStatementAutoformalizationAgent(StatementAutoformalizationAgent):
             logger.warning(f'autoformalize_async({tag}): Statement parsing/validation failed due to {repr(e)}')
             return None, None
         
-        breakpoint()
         return header, stmt_code
         
 class Goedel_LLMStatementAutoformalizationAgent(LLMStatementAutoformalizationAgent):
@@ -189,7 +185,7 @@ class Goedel_LLMStatementAutoformalizationAgent(LLMStatementAutoformalizationAge
         p = remove_comments(code).strip().replace('\nlemma ', '\ntheorem ').replace('\nexample ', '\ntheorem test_problem')
         start_pos = p.find('theorem test_problem')
         assert start_pos != -1, 'Start pos not found'
-        intro_code, stmt_code = p[:start_pos], p[start_pos:]
+        intro_code, stmt_code = p[:start_pos], p[start_pos+len('theorem test_problem'):]
         
         # Parse header
         import_list = []

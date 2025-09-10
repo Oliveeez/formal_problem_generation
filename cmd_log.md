@@ -529,16 +529,31 @@ done
 for dataset in PromptCoT-DS PromptCoT-QwQ ScaleQuest-Math
 do
     echo "Processing ${dataset}..."
-    # ulimit -s unlimited;
-    # python -m evaluator.fpg_statement_autoformalization \
-    #     --log_root output/autoformalization_pg/ \
-    #     --base_url http://0.0.0.0:37210/v1 \
-    #     --api_key statement_autoformalization \
-    #     --model_name "/cache/ckpts/Goedel-Formalizer-V2-32B" \
-    #     --n_servers 4 \
-    #     --load_path /cache/data/fpg_informal_baselines/${dataset}.processed.jsonl \
-    #     --num_generation_attempt 5000 \
-    #     --num_concurrency 96
+    ulimit -s unlimited;
+    python -m evaluator.fpg_statement_autoformalization \
+        --log_root output/autoformalization_pg/ \
+        --base_url http://0.0.0.0:37210/v1 \
+        --api_key statement_autoformalization \
+        --model_name "/cache/ckpts/Goedel-Formalizer-V2-32B" \
+        --n_servers 4 \
+        --load_path /cache/data/fpg_informal_baselines/${dataset}.processed.jsonl \
+        --num_generation_attempt 5000 \
+        --num_concurrency 1
+done
+
+for dataset in PromptCoT-DS
+do
+    echo "Processing ${dataset}..."
+    ulimit -s unlimited;
+    python -m evaluator.fpg_statement_autoformalization \
+        --log_root output/autoformalization_pg/ \
+        --base_url http://0.0.0.0:37213/v1 \
+        --api_key statement_autoformalization \
+        --model_name "/home/ma-user/local_cache/Goedel-LM/Goedel-Formalizer-V2-8B" \
+        --n_servers 1 \
+        --load_path /cache/data/fpg_informal_baselines/${dataset}.processed.jsonl \
+        --num_generation_attempt 5000 \
+        --num_concurrency 1
 done
 ```
 
