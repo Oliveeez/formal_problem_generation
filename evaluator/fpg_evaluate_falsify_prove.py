@@ -57,6 +57,7 @@ async def async_worker(
             # assert eval_result['falsify_proofs'][-1] is not None, 'Unexpected behavior'
             logger.info(f'async_worker({key}): Falsified by {eval_result["falsify_provers"][-1]}')
         logger.info(f'async_worker({key}): Estimated KC = {eval_result.get("KC", float("inf"))}')
+        logger.info(f'async_worker({key}): falsify_token_usage={eval_result.get("falsify_token_usage")}, prove_token_usage={eval_result.get("prove_token_usage")}')
         result.metainfo['eval_result'] = eval_result
         logger.info(f'async_worker({key}): finished.')
     except Exception as e:
