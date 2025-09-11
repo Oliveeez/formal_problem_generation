@@ -1628,6 +1628,28 @@ class ProblemEvaluator(MultipleProvers):
         tag: str='',
     ) -> Dict:
         eval_result = dict()
+        # KC check
+        if self.kc_estimation_mode == 'early_stop':
+            provers, proofs = await self.prove_async(
+                server=server,
+                formal_statement='example\n' + (('\n'.join(context) + '\n: ') if len(context) > 0 else ': ') + target + ' := by\n  sorry',
+                load_statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
+                intros=[v[0] for v in variables],
+                header=result.header,
+                early_stop=True,
+                tag=str(tag)+'/prove'
+            )
+            
+            if proofs[-1] is not None and len(result.formal_solution_draft or '') == 0:
+                result.formal_solution_draft = proofs[-1]
+            
+            eval_result |= {
+                'provers': provers,
+                'proofs' : proofs,
+                'KC': min([len(remove_spaces(remove_comments(p))) for p in proofs if p is not None] + [float('inf')]),
+                'prove_token_usage': self.last_token_usage
+            }
+        
         variables = []
         context, target = decompose_statement(result.formal_statement)
         for declaration in context:
@@ -1651,7 +1673,6 @@ class ProblemEvaluator(MultipleProvers):
                     if '✝' in name:
                         name = '_'
                     variables.append((name.strip(), var_type))
-
         new_varname = generate_submission_name([v[0] for v in variables])
         assert new_varname not in [v[0] for v in variables], f'new_varname={new_varname}, variables={[v[0] for v in variables]}'
         
@@ -1713,19 +1734,17 @@ class ProblemEvaluator(MultipleProvers):
         
             if proofs[-1] is not None and early_stop_if_falsified:
                 return eval_result
-        
-        # KC check
-        if self.kc_estimation_mode != 'none':
+
+        if self.kc_estimation_mode == 'full':
             provers, proofs = await self.prove_async(
                 server=server,
                 formal_statement='example\n' + (('\n'.join(context) + '\n: ') if len(context) > 0 else ': ') + target + ' := by\n  sorry',
                 load_statement=(('∀ ' + '\n'.join(context) + '\n, ') if len(context) > 0 else '') + target,
                 intros=[v[0] for v in variables],
                 header=result.header,
-                early_stop=(self.kc_estimation_mode != 'full'),
+                early_stop=False,
                 tag=str(tag)+'/prove'
             )
-            assert len(provers) == len(proofs)
             
             eval_result |= {
                 'provers': provers,
@@ -1733,6 +1752,7 @@ class ProblemEvaluator(MultipleProvers):
                 'KC': min([len(remove_spaces(remove_comments(p))) for p in proofs if p is not None] + [float('inf')]),
                 'prove_token_usage': self.last_token_usage
             }
+
         return eval_result
 
     async def evaluate_code_async(
