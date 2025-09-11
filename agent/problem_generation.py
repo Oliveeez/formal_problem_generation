@@ -1704,7 +1704,7 @@ class ProblemEvaluator(MultipleProvers):
                 tag=tag
             )
             
-            eval_result = {
+            eval_result |= {
                 'falsify_provers': provers,
                 'falsify_proofs': proofs,
                 'falsify_token_usage': self.last_token_usage
@@ -1726,14 +1726,13 @@ class ProblemEvaluator(MultipleProvers):
             )
             assert len(provers) == len(proofs)
             
-            return eval_result | {
+            eval_result |= {
                 'provers': provers,
                 'proofs' : proofs,
                 'KC': min([len(remove_spaces(remove_comments(p))) for p in proofs if p is not None] + [float('inf')]),
                 'prove_token_usage': self.last_token_usage
             }
-        else:
-            return eval_result
+        return eval_result
 
     async def evaluate_code_async(
         self,
@@ -1789,7 +1788,7 @@ class ProblemEvaluator(MultipleProvers):
         assert new_varname not in [v[0] for v in variables], f'new_varname={new_varname}, variables={[v[0] for v in variables]}'
         
         # If proven, try satisfying
-        if eval_satisfying_if_possible and proofs[-1] is not None:
+        if eval_satisfying_if_possible and any(p for p in proofs is not None):
             if len(variables) == 0:
                 # satisfying_statement == 'example : True := by sorry'
                 provers = ['heuristic:empty_context']
@@ -1829,11 +1828,13 @@ class ProblemEvaluator(MultipleProvers):
         )
         assert len(provers) == len(proofs)
         
-        return eval_result | {
+        eval_result |= {
             'falsify_provers': provers,
             'falsify_proofs': proofs,
             'falsify_token_usage': self.last_token_usage
         }
+        
+        return eval_result
 
 class ProblemFalsifier(MultipleProvers):
     def __init__(
