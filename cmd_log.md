@@ -792,6 +792,35 @@ python -m evaluator.fpg_evaluate_falsify_prove \
     --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
     --num_concurrency 60 --kc_estimation_mode early_stop --try_num 4 --early_stop_if_falsified False
 
+
+# Resume and use new version
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_falsify_prove \
+    --load_path output/autoformalization_pg_kimina7b/PromptCoT-QwQ_kimina7b/fpg_evaluate_falsify_prove.20250910-221638.pkl \
+    --log_root output/autoformalization_pg_kimina7b/PromptCoT-QwQ_kimina7b \
+    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
+    --num_concurrency 60 --kc_estimation_mode early_stop --try_num 4 --early_stop_if_falsified False
+
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_falsify_prove \
+    --load_path output/autoformalization_pg_kimina7b/ScaleQuest-Math_kimina7b/fpg_evaluate_falsify_prove.20250910-221638.pkl \
+    --log_root output/autoformalization_pg_kimina7b/ScaleQuest-Math_kimina7b \
+    --proof_gen_base_urls "['http://0.0.0.0:37213/v1','http://0.0.0.0:37214/v1','http://0.0.0.0:37215/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
+    --num_concurrency 60 --kc_estimation_mode early_stop --try_num 4 --early_stop_if_falsified False
+
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_falsify_prove \
+    --load_path output/autoformalization_pg_kimina7b/PromptCoT-DS_kimina7b/fpg_evaluate_falsify_prove.20250910-222012.pkl \
+    --log_root output/autoformalization_pg_kimina7b/PromptCoT-DS_kimina7b \
+    --proof_gen_base_urls "['http://0.0.0.0:37218/v1','http://0.0.0.0:37216/v1','http://0.0.0.0:37217/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
+    --num_concurrency 60 --kc_estimation_mode early_stop --try_num 4 --early_stop_if_falsified False
+
 # Cao 8 GPUs
 export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
 ldd `which python`
