@@ -710,7 +710,7 @@ def normalize_draft(s: str) -> str:
     return '\n'.join(l for l in s_filled.splitlines() if l.strip() != '')
 
 def decompose_statement(s : str) -> Tuple[List[str], str]:
-    s = s.strip()
+    s = replace_sorry(remove_comments(s)).strip()
     target_split = None
     if s.startswith('∀'):
         target_split = ','
@@ -719,6 +719,20 @@ def decompose_statement(s : str) -> Tuple[List[str], str]:
         target_split = ':'
         assert s.endswith(':= sorry')
         s = s[len('example'):-len(':= sorry')].strip()
+    elif s.startswith('theorem'):
+        theorem_name = s.split()[1]
+        target_split = ':'
+        assert s.endswith(':= sorry')
+        s = s[len('theorem'):-len(':= sorry')].strip()
+        assert s.startswith(theorem_name)
+        s = s[len(theorem_name):].strip()
+    elif s.startswith('lemma'):
+        theorem_name = s.split()[1]
+        target_split = ':'
+        assert s.endswith(':= sorry')
+        s = s[len('lemma'):-len(':= sorry')].strip()
+        assert s.startswith(theorem_name)
+        s = s[len(theorem_name):].strip()
     else:
         # ∀-statement with no hypotheses
         return [], s.strip()

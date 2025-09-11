@@ -68,7 +68,7 @@ async def async_worker(
     except Exception as e:
         logger.info(f'worker({idx}): Failed due to {repr(e)}:\n{traceback.format_exc()}')
         d |= {
-            'exception': str(repr(e)), 
+            'exception': str(repr(e)),
             'traceback': traceback.format_exc()
         }
     finally:

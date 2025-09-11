@@ -18,7 +18,7 @@ from transformers import AutoTokenizer
 
 from common.constants import BANNED_TOKENS, API_TIMEOUT, CODEBLOCK_PATTERN, CORE_OPTIONS
 from common.pantograph.server import Server, TacticFailure, ServerError, PersistentServer
-from common.pantograph.dataclasses import TacticHave, TacticLet, Tactic, GoalState, Goal, ProofSearchState, ProofGenerationResult, ProofSearchResult
+from common.pantograph.dataclasses import TacticHave, TacticLet, Tactic, GoalState, Goal, ProofSearchState, ProofGenerationResult, ProofSearchResult, CompilationUnit
 from common.utils import zip_strict, remove_comments, normalize_spaces, extract_code, replace_sorry, parse_idents
 
 
@@ -1275,3 +1275,53 @@ class MultipleProvers:
                     logger.debug(f'prove_async({tag}): failed due to exception {repr(e)}')
                     proofs.append(None)
         return models, proofs
+
+    async def prove_code_async(
+        self,
+        server: PersistentServer,
+        formal_statement: str,
+        early_stop: bool,
+        tag: str='',
+    ) -> Tuple[List[str], List[str], List[CompilationUnit]]: # [(model, proof), ...]
+        self.last_token_usage = C.defaultdict(list)
+        models = []
+        proofs = []
+        
+        assert not server.is_state_based
+        server.count = float('inf')
+        await server.check_restart_async()
+        units = await server.load_code_async(
+            code=formal_statement
+        )
+        assert len(units) >= 1 and 'error' not in str([x.messages for x in units]), f'units={[units]}'
+        init_state = units[-1].goal_state
+        assert init_state is not None and len(init_state.goals) == 1, f'init_state={[init_state]}'
+        
+        for _ in range(self.try_num):
+            for prover in self.provers:
+                prover.token_usage.clear()
+                models.append(prover.model)
+                if not (await server.check_restart_async()):
+                    init_state = await server.load_example_async(
+                        code=formal_statement
+                    )
+                try:
+                    result = await prover.search_async(
+                        server=server,
+                        init_state=init_state,
+                        formal_statement=formal_statement,
+                        tag=tag,
+                    )
+                    for k, v in prover.token_usage.items():
+                        self.last_token_usage[k].append(v)
+                    if result.success:
+                        assert len(result.proof) == 1 and result.proof[0][0] == 0
+                        proofs.append(result.proof[0][-1])
+                        if early_stop:
+                            return models, proofs, units
+                    else:
+                        proofs.append(None)
+                except Exception as e:
+                    logger.debug(f'prove_async({tag}): failed due to exception {repr(e)}')
+                    proofs.append(None)
+        return models, proofs, units

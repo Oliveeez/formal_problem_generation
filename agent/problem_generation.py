@@ -1692,6 +1692,74 @@ class ProblemEvaluator(MultipleProvers):
         else:
             return eval_result
 
+    async def evaluate_code_async(
+        self,
+        server: PersistentServer,
+        result: ProblemGenerationProcess,
+        tag: str='',
+    ) -> Dict:
+        # Try proving & parse units
+        assert self.kc_estimation_mode != 'none'
+        
+        provers, proofs, units = await self.prove_code_async(
+            server=server,
+            formal_statement=result.formal_statement,
+            early_stop=(self.kc_estimation_mode != 'full'),
+            tag=tag
+        )
+        
+        eval_result = {
+            'provers': provers,
+            'proofs' : proofs,
+            'KC': min([len(remove_spaces(remove_comments(p))) for p in proofs if p is not None] + [float('inf')]),
+            'prove_token_usage': self.last_token_usage
+        }
+
+        # Format falsifying statement
+        statement_header = result.formal_statement.encode()[:units[-1].i_begin].decode()
+        statement_body = result.formal_statement.encode()[units[-1].i_begin:units[-1].i_end].decode()
+        variables = []
+        context, target = decompose_statement(statement_body)
+        for declaration in context:
+            if declaration[0] == '[':
+                try:
+                    var_names, var_type = declaration[1:-1].split(':', 1)
+                except ValueError:
+                    var_names = '_'
+                    var_type = declaration[1:-1]
+                for name in var_names.strip().split():
+                    # print(name, var_type)
+                    variables.append((name.strip(), var_type))
+            else:
+                assert '✝' not in declaration, f'declaration: {declaration}'
+                try:
+                    var_names, var_type = declaration[1:-1].split(':', 1)
+                except ValueError:
+                    var_names = declaration[1:-1]
+                    var_type = None
+                for name in var_names.strip().split():
+                    if '✝' in name:
+                        name = '_'
+                    variables.append((name.strip(), var_type))
+        new_varname = generate_submission_name([v[0] for v in variables])
+        assert new_varname not in [v[0] for v in variables], f'new_varname={new_varname}, variables={[v[0] for v in variables]}'
+        falsifying_statement = statement_header + '\n' + 'example\n' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n: ' + 'False := by\n  sorry'
+        
+        # Falsifying
+        provers, proofs, _ = await self.prove_code_async(
+            server=server,
+            formal_statement=falsifying_statement,
+            early_stop=True,
+            tag=tag
+        )
+        assert len(provers) == len(proofs)
+        
+        return eval_result | {
+            'falsify_provers': provers,
+            'falsify_proofs': proofs,
+            'falsify_token_usage': self.last_token_usage
+        }
+
 class ProblemFalsifier(MultipleProvers):
     def __init__(
         self,

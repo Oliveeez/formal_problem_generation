@@ -563,9 +563,10 @@ class PersistentServer:
         if _sync_init:
             self.check_restart()
 
-    async def check_restart_async(self) -> None:
+    async def check_restart_async(self) -> bool:
+        # True: not restarted; False: restarted
         if (self.count < self.max_count) and (self.server.proc is not None): # Assuming if server is dead, self.count is set to float('inf'). 
-            return
+            return True
         
         logger.debug(f'PersistentServer({self.tag}): Restarting...')
         await self.server.restart_async()
@@ -576,6 +577,7 @@ class PersistentServer:
             assert 'error' not in str(units) and self.init_filtering_state is not None
 
         self.count = 0
+        return False
     
     check_restart = to_sync(check_restart_async)
 
@@ -649,7 +651,7 @@ class PersistentServer:
 
     @record_server_error
     async def goal_tactic_async(self, *args, **kwargs) -> GoalState:
-        assert self.is_state_based, f'PersistentServer({self.tag}): goal_tactic_async() must be used w/ state-based.'
+        # assert self.is_state_based, f'PersistentServer({self.tag}): goal_tactic_async() must be used w/ state-based.'
         return await self.server.goal_tactic_async(*args, **kwargs)
     
     goal_tactic = to_sync(goal_tactic_async)
