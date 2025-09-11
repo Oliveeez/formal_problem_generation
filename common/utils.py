@@ -733,6 +733,13 @@ def decompose_statement(s : str) -> Tuple[List[str], str]:
         s = s[len('lemma'):-len(':= sorry')].strip()
         assert s.startswith(theorem_name)
         s = s[len(theorem_name):].strip()
+    elif s.startswith('def'):
+        theorem_name = s.split()[1]
+        target_split = ':'
+        assert s.endswith(':= sorry')
+        s = s[len('def'):-len(':= sorry')].strip()
+        assert s.startswith(theorem_name)
+        s = s[len(theorem_name):].strip()
     else:
         # ∀-statement with no hypotheses
         return [], s.strip()

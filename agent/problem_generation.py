@@ -1744,7 +1744,7 @@ class ProblemEvaluator(MultipleProvers):
         new_varname = generate_submission_name([v[0] for v in variables])
         assert new_varname not in [v[0] for v in variables], f'new_varname={new_varname}, variables={[v[0] for v in variables]}'
         
-        satisfying_statement = statement_header + '\n' + 'example : ∃' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n, True := by\n  sorry'
+        satisfying_statement = statement_header + '\n' + 'example : ∃' + '\n'.join(['(' + n.strip() + ' : ' + t.strip() + ')' for (n, t) in variables] + [f'({new_varname} : {target.strip()})']) + '\n, True := by\n  sorry'
         falsifying_statement = statement_header + '\n' + 'example\n' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n: ' + 'False := by\n  sorry'
 
         # Satisfying

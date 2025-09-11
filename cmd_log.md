@@ -718,7 +718,7 @@ python -m evaluator.mustard_evaluate_falsify_prove \
     --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1']" \
     --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover']" \
     --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
-    --num_concurrency 3 --kc_estimation_mode early_stop --try_num 4 --early_stop_if_falsified False --debug True
+    --num_concurrency 60 --kc_estimation_mode early_stop --try_num 4
 
 ## 8 GPUs
 export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
