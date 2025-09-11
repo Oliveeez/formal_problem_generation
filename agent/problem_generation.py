@@ -1681,7 +1681,7 @@ class ProblemEvaluator(MultipleProvers):
                     intros=[],
                     header=result.header,
                     early_stop=True,
-                    tag=tag
+                    tag=str(tag)+'/satisfy'
                 )
                 eval_result |= {
                     'satisfy_provers': provers,
@@ -1702,7 +1702,7 @@ class ProblemEvaluator(MultipleProvers):
                 intros=[v[0] for v in variables] + [new_varname],
                 header=result.header,
                 early_stop=True,
-                tag=tag
+                tag=str(tag)+'/falsify'
             )
             
             eval_result |= {
@@ -1723,7 +1723,7 @@ class ProblemEvaluator(MultipleProvers):
                 intros=[v[0] for v in variables],
                 header=result.header,
                 early_stop=(self.kc_estimation_mode != 'full'),
-                tag=tag
+                tag=str(tag)+'/prove'
             )
             assert len(provers) == len(proofs)
             
@@ -1750,7 +1750,7 @@ class ProblemEvaluator(MultipleProvers):
             server=server,
             formal_statement=result.formal_statement,
             early_stop=(self.kc_estimation_mode != 'full'),
-            tag=tag
+            tag=str(tag)+'/prove'
         )
         
         eval_result |= {
@@ -1809,7 +1809,7 @@ class ProblemEvaluator(MultipleProvers):
                     server=server,
                     formal_statement=satisfying_statement,
                     early_stop=True,
-                    tag=tag
+                    tag=str(tag)+'/satisfy'
                 )
                 eval_result |= {
                     'satisfy_provers': provers,
@@ -1826,7 +1826,7 @@ class ProblemEvaluator(MultipleProvers):
             server=server,
             formal_statement=falsifying_statement,
             early_stop=True,
-            tag=tag
+            tag=str(tag)+'/falsify'
         )
         assert len(provers) == len(proofs)
         
