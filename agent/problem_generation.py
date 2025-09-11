@@ -1627,6 +1627,7 @@ class ProblemEvaluator(MultipleProvers):
         eval_satisfying_if_possible: bool=True,
         tag: str='',
     ) -> Dict:
+        eval_result = dict()
         variables = []
         context, target = decompose_statement(result.formal_statement)
         for declaration in context:
@@ -1741,6 +1742,7 @@ class ProblemEvaluator(MultipleProvers):
         eval_satisfying_if_possible: bool=True,
         tag: str='',
     ) -> Dict:
+        eval_result = dict()
         # Try proving & parse units
         assert self.kc_estimation_mode != 'none'
         
@@ -1751,7 +1753,7 @@ class ProblemEvaluator(MultipleProvers):
             tag=tag
         )
         
-        eval_result = {
+        eval_result |= {
             'provers': provers,
             'proofs' : proofs,
             'KC': min([len(remove_spaces(remove_comments(p))) for p in proofs if p is not None] + [float('inf')]),
