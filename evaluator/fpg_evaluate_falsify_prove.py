@@ -145,7 +145,7 @@ def main(
     ]
 
     tasks = [
-        i for (i, sample) in enumerate(finished_list) if len(sample.formal_statement or '') > 0
+        i for (i, sample) in enumerate(finished_list) if (len(sample.formal_statement or '') > 0) and ('eval_result' not in sample.metainfo)
     ]
     logger.info(f'Evaluating {len(tasks)} samples.')
 
