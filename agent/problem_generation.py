@@ -1715,7 +1715,7 @@ class ProblemEvaluator(MultipleProvers):
             'prove_token_usage': self.last_token_usage
         }
 
-        # Format falsifying statement
+        # Format satisfying / falsifying statement
         statement_header = result.formal_statement.encode()[:units[-1].i_begin].decode()
         statement_body = result.formal_statement.encode()[units[-1].i_begin:units[-1].i_end].decode()
         variables = []
@@ -1743,7 +1743,27 @@ class ProblemEvaluator(MultipleProvers):
                     variables.append((name.strip(), var_type))
         new_varname = generate_submission_name([v[0] for v in variables])
         assert new_varname not in [v[0] for v in variables], f'new_varname={new_varname}, variables={[v[0] for v in variables]}'
+        
+        satisfying_statement = statement_header + '\n' + 'example : ∃' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n, True := by\n  sorry'
         falsifying_statement = statement_header + '\n' + 'example\n' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n: ' + 'False := by\n  sorry'
+
+        # Satisfying
+        try_num = self.try_num
+        self.try_num = 1
+        provers, proofs, _ = await self.prove_code_async(
+            server=server,
+            formal_statement=satisfying_statement,
+            early_stop=True,
+            tag=tag
+        )
+        eval_result |= {
+            'satisfy_provers': provers,
+            'satisfy_proofs': proofs,
+            'satisfy_token_usage': self.last_token_usage
+        }
+        self.try_num = try_num
+        if proofs[-1] is not None:
+            return eval_result
         
         # Falsifying
         provers, proofs, _ = await self.prove_code_async(

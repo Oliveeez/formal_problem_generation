@@ -53,11 +53,12 @@ async def async_worker(
             early_stop_if_falsified=early_stop_if_falsified,
             tag=str(key)
         )
-        if eval_result.get('falsify_proofs', [None])[-1] is not None:
-            # assert eval_result['falsify_proofs'][-1] is not None, 'Unexpected behavior'
+        if eval_result.get('satisfy_proofs', [None])[-1] is not None:
+            logger.info(f'async_worker({key}): Satisfied by {eval_result["satisfy_provers"][-1]}')
+        elif eval_result.get('falsify_proofs', [None])[-1] is not None:
             logger.info(f'async_worker({key}): Falsified by {eval_result["falsify_provers"][-1]}')
         logger.info(f'async_worker({key}): Estimated KC = {eval_result.get("KC", float("inf"))}')
-        logger.info(f'async_worker({key}): falsify_token_usage={eval_result.get("falsify_token_usage")}, prove_token_usage={eval_result.get("prove_token_usage")}')
+        logger.info(f'async_worker({key}): prove_token_usage={eval_result.get("prove_token_usage")}, satisfy_token_usage={eval_result.get("satisfy_token_usage")}, falsify_token_usage={eval_result.get("falsify_token_usage")}')
         result.metainfo['eval_result'] = eval_result
         logger.info(f'async_worker({key}): finished.')
     except Exception as e:
