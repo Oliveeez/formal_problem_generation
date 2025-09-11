@@ -1624,6 +1624,7 @@ class ProblemEvaluator(MultipleProvers):
         server: PersistentServer,
         result: ProblemGenerationProcess,
         early_stop_if_falsified: bool,
+        eval_satisfying_if_possible: bool=True,
         tag: str='',
     ) -> Dict:
         variables = []
@@ -1652,10 +1653,48 @@ class ProblemEvaluator(MultipleProvers):
 
         new_varname = generate_submission_name([v[0] for v in variables])
         assert new_varname not in [v[0] for v in variables], f'new_varname={new_varname}, variables={[v[0] for v in variables]}'
+        
+        # If proven, try satisfying
+        if eval_satisfying_if_possible and len(result.formal_solution_draft or '') > 0:
+            if len(variables) == 0:
+                # satisfying_statement == 'example : True := by sorry'
+                provers = ['heuristic:empty_context']
+                proofs = ['trivial']
+                eval_result |= {
+                    'satisfy_provers': provers,
+                    'satisfy_proofs':proofs,
+                    'satisfy_token_usage': []
+                }
+            else:
+                # satisfying_statement is non-trivial
+                try_num = self.try_num
+                self.try_num = 1
+                satisfying_load_statement = '∃\n' + '\n'.join(context) + '\n, True',
+                satisfying_formal_statement = 'example : ' + satisfying_load_statement + ' := by\n  sorry',
+                provers, proofs = await self.prove_async(
+                    server=server,
+                    formal_statement=satisfying_formal_statement,
+                    load_statement=satisfying_load_statement,
+                    intros=[],
+                    header=result.header,
+                    early_stop=True,
+                    tag=tag
+                )
+                eval_result |= {
+                    'satisfy_provers': provers,
+                    'satisfy_proofs': proofs,
+                    'satisfy_token_usage': self.last_token_usage
+                }
+                self.try_num = try_num
+            if proofs[-1] is not None:
+                return eval_result
+        
+        falsifying_formal_statement = 'example\n' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n: ' + 'False := by\n  sorry'
+        falsifying_load_statement = '∀ ' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n, ' + 'False'
         provers, proofs = await self.prove_async(
             server=server,
-            formal_statement='example\n' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n: ' + 'False := by\n  sorry',
-            load_statement='∀ ' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n, ' + 'False',
+            formal_statement=falsifying_formal_statement,
+            load_statement=falsifying_load_statement,
             intros=[v[0] for v in variables] + [new_varname],
             header=result.header,
             early_stop=True,
@@ -1696,6 +1735,7 @@ class ProblemEvaluator(MultipleProvers):
         self,
         server: PersistentServer,
         result: ProblemGenerationProcess,
+        eval_satisfying_if_possible: bool=True,
         tag: str='',
     ) -> Dict:
         # Try proving & parse units
@@ -1744,28 +1784,39 @@ class ProblemEvaluator(MultipleProvers):
         new_varname = generate_submission_name([v[0] for v in variables])
         assert new_varname not in [v[0] for v in variables], f'new_varname={new_varname}, variables={[v[0] for v in variables]}'
         
-        satisfying_statement = statement_header + '\n' + 'example : ∃' + '\n'.join(['(' + n.strip() + ' : ' + t.strip() + ')' for (n, t) in variables] + [f'({new_varname} : {target.strip()})']) + '\n, True := by\n  sorry'
-        falsifying_statement = statement_header + '\n' + 'example\n' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n: ' + 'False := by\n  sorry'
-
-        # Satisfying
-        try_num = self.try_num
-        self.try_num = 1
-        provers, proofs, _ = await self.prove_code_async(
-            server=server,
-            formal_statement=satisfying_statement,
-            early_stop=True,
-            tag=tag
-        )
-        eval_result |= {
-            'satisfy_provers': provers,
-            'satisfy_proofs': proofs,
-            'satisfy_token_usage': self.last_token_usage
-        }
-        self.try_num = try_num
-        if proofs[-1] is not None:
-            return eval_result
+        # If proven, try satisfying
+        if eval_satisfying_if_possible and proofs[-1] is not None:
+            if len(variables) == 0:
+                # satisfying_statement == 'example : True := by sorry'
+                provers = ['heuristic:empty_context']
+                proofs = ['trivial']
+                eval_result |= {
+                    'satisfy_provers': provers,
+                    'satisfy_proofs':proofs,
+                    'satisfy_token_usage': []
+                }
+            else:
+                # satisfying_statement is non-trivial
+                try_num = self.try_num
+                self.try_num = 1
+                satisfying_statement = statement_header + '\n' + 'example : ∃' + '\n'.join(['(' + n.strip() + ' : ' + t.strip() + ')' for (n, t) in variables]) + '\n, True := by\n  sorry'
+                provers, proofs, _ = await self.prove_code_async(
+                    server=server,
+                    formal_statement=satisfying_statement,
+                    early_stop=True,
+                    tag=tag
+                )
+                eval_result |= {
+                    'satisfy_provers': provers,
+                    'satisfy_proofs': proofs,
+                    'satisfy_token_usage': self.last_token_usage
+                }
+                self.try_num = try_num
+            if proofs[-1] is not None:
+                return eval_result
         
         # Falsifying
+        falsifying_statement = statement_header + '\n' + 'example\n' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n: ' + 'False := by\n  sorry'
         provers, proofs, _ = await self.prove_code_async(
             server=server,
             formal_statement=falsifying_statement,
