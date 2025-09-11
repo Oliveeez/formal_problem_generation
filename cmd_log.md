@@ -834,7 +834,7 @@ python -m evaluator.fpg_evaluate_falsify_prove \
     --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1','http://0.0.0.0:37213/v1','http://0.0.0.0:37214/v1','http://0.0.0.0:37215/v1']" \
     --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
     --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
-    --num_concurrency 128 --kc_estimation_mode early_stop --try_num 2 --early_stop_if_falsified False
+    --num_concurrency 120 --kc_estimation_mode early_stop --try_num 2 --early_stop_if_falsified False
 ```
 
 # Data Scaleup: Deductive Proving FineLeanCorups

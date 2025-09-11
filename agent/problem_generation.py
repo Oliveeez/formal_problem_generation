@@ -1671,8 +1671,8 @@ class ProblemEvaluator(MultipleProvers):
                 # satisfying_statement is non-trivial
                 try_num = self.try_num
                 self.try_num = 1
-                satisfying_load_statement = '∃\n' + '\n'.join(context) + '\n, True',
-                satisfying_formal_statement = 'example : ' + satisfying_load_statement + ' := by\n  sorry',
+                satisfying_load_statement = '∃\n' + '\n'.join(context) + '\n, True'
+                satisfying_formal_statement = 'example : ' + satisfying_load_statement + ' := by\n  sorry'
                 provers, proofs = await self.prove_async(
                     server=server,
                     formal_statement=satisfying_formal_statement,
