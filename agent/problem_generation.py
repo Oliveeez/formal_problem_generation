@@ -1655,6 +1655,7 @@ class ProblemEvaluator(MultipleProvers):
         assert new_varname not in [v[0] for v in variables], f'new_varname={new_varname}, variables={[v[0] for v in variables]}'
         
         # If proven, try satisfying
+        is_satisfied = False
         if eval_satisfying_if_possible and len(result.formal_solution_draft or '') > 0:
             if len(variables) == 0:
                 # satisfying_statement == 'example : True := by sorry'
@@ -1665,6 +1666,7 @@ class ProblemEvaluator(MultipleProvers):
                     'satisfy_proofs':proofs,
                     'satisfy_token_usage': []
                 }
+                is_satisfied = True
             else:
                 # satisfying_statement is non-trivial
                 try_num = self.try_num
@@ -1686,30 +1688,32 @@ class ProblemEvaluator(MultipleProvers):
                     'satisfy_token_usage': self.last_token_usage
                 }
                 self.try_num = try_num
-            if proofs[-1] is not None:
+                is_satisfied = (proofs[-1] is not None)
+        
+        # If is satisfied, skip falsify check
+        if not is_satisfied:
+            falsifying_formal_statement = 'example\n' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n: ' + 'False := by\n  sorry'
+            falsifying_load_statement = '∀ ' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n, ' + 'False'
+            provers, proofs = await self.prove_async(
+                server=server,
+                formal_statement=falsifying_formal_statement,
+                load_statement=falsifying_load_statement,
+                intros=[v[0] for v in variables] + [new_varname],
+                header=result.header,
+                early_stop=True,
+                tag=tag
+            )
+            
+            eval_result = {
+                'falsify_provers': provers,
+                'falsify_proofs': proofs,
+                'falsify_token_usage': self.last_token_usage
+            }
+        
+            if proofs[-1] is not None and early_stop_if_falsified:
                 return eval_result
         
-        falsifying_formal_statement = 'example\n' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n: ' + 'False := by\n  sorry'
-        falsifying_load_statement = '∀ ' + '\n'.join(context + [f'({new_varname} : {target.strip()})']) + '\n, ' + 'False'
-        provers, proofs = await self.prove_async(
-            server=server,
-            formal_statement=falsifying_formal_statement,
-            load_statement=falsifying_load_statement,
-            intros=[v[0] for v in variables] + [new_varname],
-            header=result.header,
-            early_stop=True,
-            tag=tag
-        )
-        
-        eval_result = {
-            'falsify_provers': provers,
-            'falsify_proofs': proofs,
-            'falsify_token_usage': self.last_token_usage
-        }
-    
-        if proofs[-1] is not None and early_stop_if_falsified:
-            return eval_result
-        
+        # KC check
         if self.kc_estimation_mode != 'none':
             provers, proofs = await self.prove_async(
                 server=server,
