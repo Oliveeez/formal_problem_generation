@@ -224,7 +224,7 @@ class Server:
         :meta private:
         """
         async with self.lock:
-            assert self.proc
+            assert self.proc, 'Server failure'
             s = json.dumps(payload, ensure_ascii=False)
             
             # self.proc.sendline(f"{cmd} {s}")

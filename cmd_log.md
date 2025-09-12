@@ -641,6 +641,44 @@ python -m evaluator.fpg_evaluate_falsify_prove \
     --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
     --num_concurrency 96 --kc_estimation_mode none --try_num 1
 
+# Cao 8 GPUs (2 of 8): continue kimina prover falsifying
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
+MODEL_LIST=( \
+    "/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B" \
+    "/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B" \
+)
+KEY_LIST=( \
+    "theorem_prover" \
+    "theorem_prover" \
+)
+length=${#MODEL_LIST[@]}
+
+for ((i=0; i<length; i++)); do
+    export ASCEND_RT_VISIBLE_DEVICES=$((i + 6));
+    echo $ASCEND_RT_VISIBLE_DEVICES
+    python -m vllm.entrypoints.openai.api_server \
+        --model ${MODEL_LIST[i+1]} \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key ${KEY_LIST[i+1]} \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 &
+done
+
+# Cao 8 GPUs (2 of 8)
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_falsify_prove \
+    --load_path /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-linear.39980.problem_generator.nopack/fpg_evaluate_falsify_prove.20250908-234856.hidden_unsuccessful_falsifying.pkl \
+    --log_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-linear.39980.problem_generator.nopack \
+    --proof_gen_base_urls "['http://0.0.0.0:37216/v1','http://0.0.0.0:37217/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B']" \
+    --num_concurrency 40 --kc_estimation_mode none --try_num 2 --early_stop_if_falsified False
+
 
 export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
 ldd `which python`
@@ -863,7 +901,72 @@ python -m evaluator.fpg_evaluate_falsify_prove \
     --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1','http://0.0.0.0:37213/v1','http://0.0.0.0:37214/v1','http://0.0.0.0:37215/v1']" \
     --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
     --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
-    --num_concurrency 120 --kc_estimation_mode early_stop --try_num 2 --early_stop_if_falsified False
+    --num_concurrency 120 --kc_estimation_mode none --try_num 2 --early_stop_if_falsified False
+
+# Cao 4 GPU
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_falsify_prove \
+    --load_path output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch/problem_generation.20250909-090734.pkl \
+    --log_root output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch \
+    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
+    --num_concurrency 60 --kc_estimation_mode none --try_num 4 --early_stop_if_falsified False
+```
+
+## Evaluation: KC of Deductive Explorers
+```shell
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
+MODEL_LIST=( \
+    "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
+    "/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B" \
+    "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
+    "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
+    "/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B" \
+    "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
+)
+KEY_LIST=( \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+)
+length=${#MODEL_LIST[@]}
+
+for ((i=0; i<length; i++)); do
+    export ASCEND_RT_VISIBLE_DEVICES=$i;
+    python -m vllm.entrypoints.openai.api_server \
+        --model ${MODEL_LIST[i+1]} \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key ${KEY_LIST[i+1]} \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 &
+done
+
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_kc \
+    --load_path /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-linear.39980.problem_generator.nopack/fpg_evaluate_falsify_prove.20250911-230039.pkl \
+    --log_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-linear.39980.problem_generator.nopack \
+    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1','http://0.0.0.0:37213/v1','http://0.0.0.0:37214/v1','http://0.0.0.0:37215/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
+    --num_concurrency 120 --kc_estimation_mode early_stop --try_num 2
+
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_kc \
+    --load_path /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v2_strict/Goedel-Prover-V2-8B.Numina-Lean.problem_generator.nopack/fpg_evaluate_falsify_prove.20250907-170721.pkl \
+    --log_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v2_strict/Goedel-Prover-V2-8B.Numina-Lean.problem_generator.nopack \
+    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1','http://0.0.0.0:37213/v1','http://0.0.0.0:37214/v1','http://0.0.0.0:37215/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
+    --num_concurrency 120 --kc_estimation_mode early_stop --try_num 2
 ```
 
 # Data Scaleup: Deductive Proving FineLeanCorups

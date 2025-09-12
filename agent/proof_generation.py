@@ -888,6 +888,7 @@ class LLMWholeProofGenerationAgent(ProofGenerationAgent):
             #     logger.warning(f'Generation length exceeded: [{response.choices[0].message.content}]')
             self.token_usage['completion_tokens'] += response.usage.completion_tokens
             self.token_usage['prompt_tokens'] += response.usage.prompt_tokens
+            self.token_usage['cached_tokens'] += response.usage.prompt_tokens_details.cached_tokens
             # breakpoint()
             proof = self.parse_proof(response.choices[0].message.content)
             idents = set(remove_comments(proof).split()).union(parse_idents(remove_comments(proof)))

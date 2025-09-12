@@ -858,6 +858,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                             if step.is_introducing:
                                 for v in step.new_contexts:
                                     assert submission_fvar.t != v.t, f'submission_fvar.t={submission_fvar.t}, introduced_hyp={step.step_code}'
+                        # TODO: Add a lightweighted falsify check?
                     except:
                         logger.warning(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, submission step {cur_step.category} failed due to {repr(e)}')
                     
@@ -902,6 +903,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                     return result
                 
                 # Not submitting: deducing or introducing
+                assert server.server.proc is not None, 'Server is dead'
                 try:
                     step_code = remove_comments(cur_step.step_code)
                     idents = set(step_code.split()).union(parse_idents(step_code))
@@ -1065,6 +1067,7 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
             
             self.token_usage['completion_tokens'].append(response.usage.completion_tokens)
             self.token_usage['prompt_tokens'].append(response.usage.prompt_tokens)
+            self.token_usage['cached_tokens'].append(response.usage.prompt_tokens_details.cached_tokens)
             
             # Neglect failed generations
             if not response.choices[0].finish_reason == 'stop':
@@ -1881,6 +1884,7 @@ class ProblemFalsifier(MultipleProvers):
         )
         self.server = server
         self.data_train = []
+        self.token_usage = C.defaultdict(list)
         self.lock = asyncio.Lock()
     
     def __del__(self):
@@ -1979,6 +1983,9 @@ class ProblemFalsifier(MultipleProvers):
                     falsify_model=falsify_models[-1],
                     falsify_proof=falsify_proofs[-1],
                 ))
+            
+            for k, v in self.last_token_usage.items():
+                self.token_usage[k].append(v)
             
             return falsify_proofs[-1]
 

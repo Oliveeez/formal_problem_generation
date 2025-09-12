@@ -113,6 +113,7 @@ class LLMStatementAutoformalizationAgent(StatementAutoformalizationAgent):
             return None, None
         self.last_token_usage['completion_tokens'].append(response.usage.completion_tokens)
         self.last_token_usage['prompt_tokens'].append(response.usage.prompt_tokens)
+        self.last_token_usage['cached_tokens'].append(response.usage.prompt_tokens_details.cached_tokens)
         
         try:
             header, stmt_code = self.parse_result(response.choices[0].message.content)

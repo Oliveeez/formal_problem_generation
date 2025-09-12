@@ -657,3 +657,43 @@ class ProblemGenerationProcess(msgspec.Struct):
 
     # Meta information (should be organized in json)
     metainfo: str
+
+    @property
+    def is_submitted(self) -> bool:
+        return len(self.formal_statement or '') > 0
+
+    @property
+    def is_falsified(self) -> bool:
+        assert self.is_submitted, 'Only submitted examples can be evaluated'
+        if 'eval_old_result' in self.metainfo:
+            if any(p is not None for p in self.metainfo['eval_old_result']['falsify_proofs']):
+                return True
+        assert 'eval_result' in self.metainfo
+        # 'eval_result' may contain both falsifying and satisfying
+        if any(p is not None for p in self.metainfo['eval_result'].get('satisfy_proofs', [None])):
+            return False
+        return any(p is not None for p in self.metainfo['eval_result']['falsify_proofs'])
+
+    @property
+    def is_evaluated(self) -> bool:
+        return 'eval_result' in self.metainfo
+
+    @property
+    def is_proven(self) -> bool:
+        assert self.is_submitted, 'Only submitted examples can be evaluated'
+        if len(self.trajectory) > 0:
+            # Deductive Exploration
+            return len(self.formal_statement) > 0 and self.metainfo.get('is_solution_validated')
+        else:
+            # Baselines
+            if len(self.formal_solution_draft or '') > 0:
+                return True
+            if any(p is not None for p in self.metainfo.get('eval_result', dict()).get('proofs', [None])):
+                logger.warning(f"`len(d.formal_solution_draft or '') == 0` but `eval_result` is proven")
+                return True
+            return False
+
+    @property
+    def is_valid(self) -> bool:
+        assert self.is_submitted, 'Only submitted examples can be evaluated'
+        return self.is_proven and not self.is_falsified

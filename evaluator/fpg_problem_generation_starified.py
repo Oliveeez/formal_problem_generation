@@ -9,6 +9,7 @@ from typing import Dict, Set, List, Any, Tuple, Optional
 import pickle
 import regex as re
 import itertools as I
+import collections as C
 import random
 
 import vllm     # vLLM should be imported before any 3rd-party libraries, o.w. all Pantograph REPLs are scheduled at the same CPU core.
@@ -196,6 +197,13 @@ def main(
             available_servers.insert(0, server)
             available_parsers.insert(0, parser)
             if falsifier is not None:
+                try:
+                    result.metainfo = json.loads(result.metainfo)
+                except:
+                    pass
+                result.metainfo['falsifier_token_usage'] = falsifier.token_usage
+                result.metainfo = json.dumps(result.metainfo)
+                falsifier.token_usage = C.defaultdict(list)
                 available_falsifiers.insert(0, falsifier)
 
     async def _async_main():
