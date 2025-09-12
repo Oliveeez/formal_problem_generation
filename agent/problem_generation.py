@@ -1067,7 +1067,7 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
             
             self.token_usage['completion_tokens'].append(response.usage.completion_tokens)
             self.token_usage['prompt_tokens'].append(response.usage.prompt_tokens)
-            self.token_usage['cached_tokens'].append(response.usage.prompt_tokens_details.cached_tokens)
+            # self.token_usage['cached_tokens'].append(response.usage.prompt_tokens_details.cached_tokens)
             
             # Neglect failed generations
             if not response.choices[0].finish_reason == 'stop':
