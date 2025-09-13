@@ -244,6 +244,7 @@ do
         --trust-remote-code \
         --enable-prefix-caching \
         --disable-log-requests \
+        --enable-prompt-tokens-details \
         --max-model-len 8192 &
 done
 
@@ -261,13 +262,14 @@ do
         --trust-remote-code \
         --enable-prefix-caching \
         --disable-log-requests \
+        --enable-prompt-tokens-details \
         --max-model-len 8192 &
 done
 
 # Agent Run
 ulimit -s unlimited;
 python -m evaluator.fpg_problem_generation_starified \
-    --log_root output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch \
+    --log_root output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.0913 \
     --agent_name sft_ar_v3 \
     --num_generation_attempt 5000 \
     --condition_sources "['numina_lean']" \
@@ -967,6 +969,15 @@ python -m evaluator.fpg_evaluate_kc \
     --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
     --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
     --num_concurrency 120 --kc_estimation_mode early_stop --try_num 2
+
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_kc \
+    --load_path output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch/fpg_evaluate_falsify_prove.20250911-223402.pkl \
+    --log_root output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch \
+    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
+    --num_concurrency 60 --kc_estimation_mode early_stop --try_num 4
 ```
 
 # Data Scaleup: Deductive Proving FineLeanCorups

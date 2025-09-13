@@ -814,6 +814,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
             parser: Optional[PersistentParsingServer]=None,
             reassemble_trajectory: bool=False,
             tag: str='',
+            staged: bool=False,
             verbose: bool=False,
         ) -> ProblemGenerationProcess:
         """
@@ -826,6 +827,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
         time_start = time.time()
         states: List[GoalState] = []
         steps: List[ProblemGenerationStep] = []
+        is_deducing_stage = False
         
         cur_problem_state = await server.load_statement_async('False')
         states.append(cur_problem_state)
@@ -902,6 +904,10 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                     self.token_usage = C.defaultdict(list)
                     return result
                 
+                if staged and is_deducing_stage and cur_step.is_introducing:
+                    logger.debug(f'generate_async({tag}): Rejected introducing step in deducing stage: {str(cur_step)}')
+                    continue
+                
                 # Not submitting: deducing or introducing
                 assert server.server.proc is not None, 'Server is dead'
                 try:
@@ -954,6 +960,10 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                     if new_context.issubset(cur_context):
                         logger.warning(f'generate_async({tag}): No new deductions in step: {str(cur_step)}')
                         continue
+                
+                if staged and not is_deducing_stage and cur_step.is_deducing:
+                    logger.info(f'generate_async({tag}): Entering deducing stage with conditions: {[str(cur_problem_state)]}')
+                    is_deducing_stage = True
 
                 states.append(new_problem_state)
                 steps.append(cur_step)

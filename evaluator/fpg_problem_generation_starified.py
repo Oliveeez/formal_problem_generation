@@ -23,7 +23,7 @@ from common.constants import FPS_GLOBAL_SETTING, CORE_OPTIONS
 from common.utils import add_one_to_port, starified_downsample
 from common.pantograph.server import PersistentServer
 from common.pantograph.parsing_server import PersistentParsingServer
-from agent.problem_generation import ProblemFalsifier
+from agent.problem_generation import ProblemFalsifier, ProblemGenerationProcess
 from agent.problem_generation import AutoregressiveProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgentV2, SFT_LLMAutoregressiveProblemGenerationAgentV3
 
 NEWLINE = '\n'
@@ -59,11 +59,12 @@ def main(
     max_tokens: int=-1,
     num_concurrency: int=12,
     resume_from: Optional[str]=None,
+    staged: bool=False,
 ):
     saved_args = {**locals()}
     
     now = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_prefix = 'problem_generation'+'.'
+    log_prefix = ('staged_' if staged else '') + 'problem_generation'+'.'
 
     os.makedirs(log_root, exist_ok=True)
     if num_concurrency > 1:
@@ -71,6 +72,8 @@ def main(
         logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
         logger.add(osp.join(log_root, log_prefix+now+'.log'), level='DEBUG')
     logger.info(f'Evaluating problem generator with hyperparams: {saved_args}')
+    if staged:
+        logger.warning('Staged intro-deducing generation.')
 
     # Resume from interrupted experiments
     if resume_from is not None:
@@ -184,6 +187,7 @@ def main(
                 parser=parser,
                 reassemble_trajectory=reassemble_trajectory,
                 tag=str(tag_i),
+                staged=staged,
                 verbose=False,
             )
             
@@ -191,6 +195,19 @@ def main(
             finished[tag_i] = result
         except Exception as e:
             logger.info(f'generate_worker({tag_i}, {condition}): generation failed due to: {repr(e)}\n{traceback.format_exc()}')
+            result = ProblemGenerationProcess(
+                informal_problem='',
+                informal_answer='',
+                informal_solution='',
+                header=None,
+                formal_statement='',
+                formal_solution_draft=None,
+                formal_proofs='',
+                steps=[],
+                dependencies=[],
+                trajectory=[],
+                metainfo=dict()
+            )
         finally:
             server.tag = ''
             parser.tag = ''
