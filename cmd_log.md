@@ -1073,3 +1073,96 @@ echo "Submit:" `cat $LOG_FILE | grep "step ProblemGenerationStepCategory.Submit 
 
 
 ```
+
+
+# Misc
+## Staged Gen: /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean-linear.39980.problem_generator.nopack
+```shell
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
+for i_experiment in 0 1 2 3
+do
+    export ASCEND_RT_VISIBLE_DEVICES=$i_experiment;
+    python -m vllm.entrypoints.openai.api_server \
+        --model /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean-linear.39980.problem_generator.nopack \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key numina-lean-goedelv2_8b-fpgv3 \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --enable-prompt-tokens-details \
+        --max-model-len 8192 &
+done
+
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
+for i_experiment in 4 5 6 7
+do
+    export ASCEND_RT_VISIBLE_DEVICES=$i_experiment;
+    python -m vllm.entrypoints.openai.api_server \
+        --model /home/ma-user/local_cache/deepseek-ai/DeepSeek_nonCoT-Prover-V2-7B \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key theorem_proving \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --enable-prompt-tokens-details \
+        --max-model-len 8192 &
+done
+
+# Agent Run
+ulimit -s unlimited;
+python -m evaluator.fpg_problem_generation_starified \
+    --log_root output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-linear.39980.problem_generator.nopack.staged \
+    --agent_name sft_ar_v3 \
+    --num_generation_attempt 5000 \
+    --condition_sources "['numina_lean']" \
+    --base_url http://0.0.0.0:37210/v1 \
+    --api_key numina-lean-goedelv2_8b-fpgv3 \
+    --model_name /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean-linear.39980.problem_generator.nopack \
+    --n_servers 4 \
+    --falsify_base_url http://0.0.0.0:37214/v1 \
+    --falsify_api_key theorem_proving \
+    --falsify_model_name /home/ma-user/local_cache/deepseek-ai/DeepSeek_nonCoT-Prover-V2-7B \
+    --falsify_n_servers 4 \
+    --num_concurrency 96 --staged True
+
+
+```
+
+# Informalization Experiments
+```shell
+for FILE_NAME in sft_ar_v3-Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.0913-valid_samples.jsonl autoformalization_pg_kimina7b-PromptCoT-DS_kimina7b-valid_samples.jsonl autoformalization_pg_kimina7b-PromptCoT-QwQ_kimina7b-valid_samples.jsonl autoformalization_pg_kimina7b-ScaleQuest-Math_kimina7b-valid_samples.jsonl sft_wg_starified-Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack-valid_samples.jsonl sft_ar_v3-Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.0913.staged-valid_samples.jsonl
+do
+    echo $FILE_NAME
+    python ./informalization.py \
+        --load_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/informalizations \
+        --save_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/informalizations/processed \
+        --file_name $FILE_NAME \
+        --n_concurrency 64
+done
+
+
+for FILE_NAME in sft_ar_v3-Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch-valid_samples.jsonl
+do
+    echo $FILE_NAME
+    python ./informalization.py \
+        --load_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/informalizations \
+        --save_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/informalizations/processed \
+        --file_name $FILE_NAME \
+        --n_concurrency 64
+done
+
+
+for SFT_TASK_NAME in Llama-3.2-3B-Instruct____autoformalization_pg_kimina7b-PromptCoT-DS_kimina7b-valid_samples Llama-3.2-3B-Instruct____autoformalization_pg_kimina7b-PromptCoT-QwQ_kimina7b-valid_samples Llama-3.2-3B-Instruct____autoformalization_pg_kimina7b-ScaleQuest-Math_kimina7b-valid_samples Llama-3.2-3B-Instruct____sft_ar_v3-Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.0913.staged-valid_samples Llama-3.2-3B-Instruct____sft_ar_v3-Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch-valid_samples Llama-3.2-3B-Instruct____sft_wg_starified-Goedel-Prover-V2-8B.Numina-Lean.whole_statement_generatior.nopack-valid_samples 
+do
+echo $SFT_TASK_NAME
+    NPROC_PER_NODE=8 xtuner train ./train_recipes/informal_problem_solving/${SFT_TASK_NAME}.py --deepspeed deepspeed_zero2;
+    xtuner convert pth_to_hf ./train_recipes/informal_problem_solving/${SFT_TASK_NAME}.py ./work_dirs/${SFT_TASK_NAME}/epoch_1.pth /cache/ckpts/informal_problem_solving/${SFT_TASK_NAME}/;
+    find ./work_dirs/${SFT_TASK_NAME} | grep state | xargs rm
+done
+```
