@@ -47,7 +47,7 @@ optim_type = AdamW
 lr = 2e-5
 betas = (0.9, 0.999)
 weight_decay = 0
-max_norm = 0.5  # grad clip
+max_norm = 0.1  # grad clip
 warmup_ratio = 0.03
 
 # Save
@@ -197,7 +197,7 @@ load_from = None
 resume = False
 
 # Defaults to use random seed and disable `deterministic`
-randomness = dict(seed=3407, deterministic=False)
+randomness = dict(seed=1, deterministic=False)
 
 # set log processor
 log_processor = dict(by_epoch=False)
