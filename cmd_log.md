@@ -1165,4 +1165,12 @@ echo $SFT_TASK_NAME
     xtuner convert pth_to_hf ./train_recipes/informal_problem_solving/${SFT_TASK_NAME}.py ./work_dirs/${SFT_TASK_NAME}/epoch_1.pth /cache/ckpts/informal_problem_solving/${SFT_TASK_NAME}/;
     find ./work_dirs/${SFT_TASK_NAME} | grep state | xargs rm
 done
+
+for SFT_TASK_NAME in Phi-4-mini-instruct.Main.informal_reasoning Phi-4-mini-instruct.Main-Staged.informal_reasoning Phi-4-mini-instruct.MUSTARDSauce.informal_reasoning Phi-4-mini-instruct.PromptCoT-DS.informal_reasoning Phi-4-mini-instruct.PromptCoT-QwQ.informal_reasoning Phi-4-mini-instruct.ScaleQuest-Math.informal_reasoning Phi-4-mini-instruct.WSG.informal_reasoning
+do
+    echo $SFT_TASK_NAME
+    NPROC_PER_NODE=8 xtuner train ./train_recipes/informal_problem_solving.Phi4-mini-instruct/${SFT_TASK_NAME}.py --deepspeed deepspeed_zero2;
+    xtuner convert pth_to_hf --fp32 ./train_recipes/informal_problem_solving.Phi4-mini-instruct/${SFT_TASK_NAME}.py ./work_dirs/${SFT_TASK_NAME}/epoch_1.pth /cache/ckpts/informal_problem_solving.Phi4-mini-instruct.step_aligned/${SFT_TASK_NAME}/;
+    find ./work_dirs/${SFT_TASK_NAME} | grep state | xargs rm
+done
 ```
