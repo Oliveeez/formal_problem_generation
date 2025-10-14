@@ -1050,6 +1050,8 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
         """
         # Generate tactics
         prompt = self.gen_prompt(state=state, step_history=step_history, conditions=conditions)
+        self.token_usage['completion_tokens'].append(0)
+        self.token_usage['prompt_tokens'].append(0)
         for _ in range(self.num_max_samples_per_trial):
             try:
                 if 'internlm' in self.gen_model_name.lower():
@@ -1075,8 +1077,8 @@ class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAge
                 logger.debug(f'gen_steps_async(): Failed to generate tactics due to {repr(e)}')
                 continue
             
-            self.token_usage['completion_tokens'].append(response.usage.completion_tokens)
-            self.token_usage['prompt_tokens'].append(response.usage.prompt_tokens)
+            self.token_usage['completion_tokens'][-1] += response.usage.completion_tokens
+            self.token_usage['prompt_tokens'][-1] += response.usage.prompt_tokens
             # self.token_usage['cached_tokens'].append(response.usage.prompt_tokens_details.cached_tokens)
             
             # Neglect failed generations
