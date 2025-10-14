@@ -1358,3 +1358,19 @@ do
     find ./work_dirs/${SFT_TASK_NAME} | grep state | xargs rm
 done
 ```
+
+
+# Frontend
+```shell
+ulimit -s unlimited;
+python -m frontend.main \
+    --agent_name sft_ar_v3 \
+    --base_url http://0.0.0.0:37210/v1 \
+    --api_key numina-lean-goedelv2_8b-fpgv2 \
+    --model_name /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean-linear.39980.problem_generator.nopack \
+    --n_servers 4 \
+    --falsify_base_url http://0.0.0.0:37214/v1 \
+    --falsify_api_key theorem_proving \
+    --falsify_model_name /home/ma-user/local_cache/deepseek-ai/DeepSeek_nonCoT-Prover-V2-7B \
+    --falsify_n_servers 4
+```

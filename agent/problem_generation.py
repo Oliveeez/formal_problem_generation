@@ -1,7 +1,7 @@
 from abc import abstractmethod
 import time
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple, Union, Dict, Set, Any, Optional
+from typing import Optional, List, Tuple, Union, Dict, Set, Any, Optional, AsyncGenerator
 import collections, unittest
 import heapq
 import asyncio
@@ -27,6 +27,21 @@ from common.pantograph.dataclasses import ProblemGenerationStep, ProblemGenerati
 from common.utils import zip_strict, remove_comments, format_forward_solution_step_prompt, normalize_spaces, extract_code, normalize_draft, parse_idents, decompose_statement, proof_decompose, generate_submission_name, is_deductive_transition, remove_spaces
 from agent.proof_generation import ProofSearchResult, ProofSearchAgent, VersatileLLMWholeProofGenerationAgent, MultipleProvers
 from agent.statement_autoformalization import VersatileLLMStatementAutoformalizationAgent
+
+
+def format_introduced_context(step_history: List[ProblemGenerationStep]) -> str:
+    introduced_fvars = []
+    for step in step_history:
+        if step.is_introducing:
+            lines = [l for l in step.step_draft.splitlines() if l != '']
+            while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
+                lines.pop(0)
+            step_code = '\n'.join(lines)
+            assert step_code.startswith('have ') and step_code.endswith(' := sorry')
+            introduced_fvars.append(step_code[len('have '):-len(' := sorry')])
+    
+    introduced_fvars = '\n'.join(introduced_fvars)
+    return introduced_fvars
 
 class ProblemGenerationAgent:
     """
@@ -996,6 +1011,178 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
 
         return result
 
+    async def detailed_generate_async(
+            self,
+            conditions: Any,
+            server: PersistentServer,
+            parser: Optional[PersistentParsingServer]=None,
+            reassemble_trajectory: bool=False,
+            tag: str='',
+            staged: bool=False,
+        ) -> AsyncGenerator[Tuple[str, Any], None]:
+        """
+        Autoregressive problem generation.
+        yield:
+        - Tuple[str, Tuple[str, str, str]]: step, introduced_context, proof_state
+        - Tuple[str, Tuple[str, str]]: step, failed_reason
+        - str: exception
+        - Tuple[str, ProblemGenerationProcess]: success
+        """
+        # Initialize
+        self.token_usage = C.defaultdict(list)
+        assert server.is_automatic(), "Search must be run in automatic mode"
+        
+        time_start = time.time()
+        states: List[GoalState] = []
+        steps: List[ProblemGenerationStep] = []
+        is_deducing_stage = False
+        
+        cur_problem_state = await server.load_statement_async('False')
+        states.append(cur_problem_state)
+        
+        # Search
+        try:
+            i_trial = 0
+            while i_trial < self.max_search_trials:
+                i_trial += 1
+                # assert [(g.name, g.target) for g in cur_problem_state.goals] == [(None, 'False')], 'Error: Strange cur_problem_state: ```' + json.dumps(cur_problem_state.serialize()) + '```'
+                
+                cur_step = await self.gen_step_async(cur_problem_state, steps, conditions)
+                # log(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, Condition {conditions}, State\n{cur_problem_state}\nStep {str(cur_step)}')
+                
+                if cur_step.is_submitting:
+                    try:
+                        # Extract submitted fvar 
+                        step_code = remove_comments(cur_step.step_code).strip()
+                        assert step_code.startswith('submit_answer '), step_code
+                        submission_name = step_code[len('submit_answer '):]
+                        submission_fvar = [v for v in cur_problem_state.goals[0].variables if v.name == submission_name]
+                        assert len(submission_fvar) == 1, f'submission_name={submission_name}, cur_problem_state={cur_problem_state}'
+                        submission_fvar = submission_fvar[0]
+                        # Reject '✝'
+                        assert '✝' not in submission_fvar.t
+                        # Reject direct submission of hypotheses
+                        for step in steps:
+                            if step.is_introducing:
+                                for v in step.new_contexts:
+                                    assert submission_fvar.t != v.t, f'submission_fvar.t={submission_fvar.t}, introduced_hyp={step.step_code}'
+                    except:
+                        yield (str(cur_step.category), (cur_step.step, repr(e)))
+                    
+                    steps.append(cur_step)
+                    result = ProblemGenerationProcess(
+                        informal_problem='',
+                        informal_answer='',
+                        informal_solution='',
+                        header=None,
+                        formal_statement='',
+                        formal_solution_draft=None,
+                        formal_proofs='',
+                        steps=steps,
+                        dependencies=[],
+                        trajectory=[(S.goals[0].variables, i) for i, S in enumerate(states)],
+                        metainfo=dict()
+                    )
+                    is_valid = await self.validate_async(
+                        result=result,
+                        server=server,
+                        tag=tag,
+                    )
+                    if not is_valid and parser is not None:
+                        is_valid = await self.reparse_validate_async(
+                            result=result,
+                            server=server,
+                            parser=parser,
+                            tag=tag,
+                        )
+                    
+                    is_analyzed = await self.analyze_async(
+                        result=result,
+                        states=states,
+                        server=server,
+                        tag=tag,
+                        reassemble_trajectory=reassemble_trajectory
+                    )
+                    result.metainfo['token_usage'] = self.token_usage
+                    result.metainfo['time_consumption'] = time.time() - time_start
+                    result.metainfo = json.dumps(result.metainfo)
+                    self.token_usage = C.defaultdict(list)
+                    
+                    yield (str(cur_step.category), (cur_step.step, format_introduced_context(steps), str(cur_problem_state)))
+                    yield ('Final', result)
+                    return
+                
+                if staged and is_deducing_stage and cur_step.is_introducing:
+                    yield (str(cur_step.category), (cur_step.step, 'Introducing step rejected in deducing stage.'))
+                    continue
+                
+                # Not submitting: deducing or introducing
+                assert server.server.proc is not None, 'Server is dead'
+                try:
+                    step_code = remove_comments(cur_step.step_code)
+                    idents = set(step_code.split()).union(parse_idents(step_code))
+                    if cur_step.is_deducing:
+                        # Validate step: 'deducing' should contain no sorries.
+                        for banned_token in BANNED_TOKENS:
+                            assert banned_token not in idents, f'Banned token "{banned_token}" in step "{step_code}"'
+                        new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)   # Preventing sorry by `TacticDraft('by\n' + cur_step.step + '\nsorry')` may hinder some steps.
+                    elif cur_step.is_introducing:
+                        for banned_token in BANNED_TOKENS[1:]:
+                            assert banned_token not in idents, f'Banned token "{banned_token}" in step "{step_code}"'
+                        new_problem_state = await server.goal_tactic_async(cur_problem_state, 0, cur_step.step)
+                    else:
+                        raise RuntimeError(cur_step)
+                    assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
+                except Exception as e:
+                    # logger.debug(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, step {cur_step.category} failed due to {repr(e)}')
+                    yield (str(cur_step.category), (cur_step.step, repr(e)))
+                    # breakpoint()
+                    # print()
+                    continue
+
+                # If cur_step is successfully executed, add it.
+                cur_step.new_contexts = [
+                    v for v in new_problem_state.goals[0].variables if
+                        v.raw_name not in {vv.raw_name for vv in cur_problem_state.goals[0].variables}
+                        # v not in forward_state.goals[0].variables
+                ]
+                
+                # Try falsifying for introducing steps
+                if cur_step.is_introducing:
+                    # breakpoint()
+                    if any((v.t_type is None or v.t_type == 'Prop') for v in cur_step.new_contexts):
+                        falsify_proof = await self.falsify_async(state=new_problem_state, server=server, step_history=steps + [cur_step], tag=tag)
+                        if falsify_proof is not None:
+                            yield (str(cur_step.category), (cur_step.step, f'New Proof State:\n```\n{str(new_problem_state).strip()}\n```\n\nFalsified by:\n```lean4\n{falsify_proof.strip()}\n```.'))
+                            continue
+                    
+                # Reject if not introducing new contexts
+                if str(new_problem_state) == str(cur_problem_state):
+                    yield (str(cur_step.category), (cur_step.step, f'State unchanged in step:\n{str(cur_step.step)}'))
+                    continue
+                
+                # Reject if only introducing existing things
+                if cur_step.is_deducing:
+                    cur_context = {v.t for v in cur_problem_state.goals[0].variables}
+                    new_context = {v.t for v in new_problem_state.goals[0].variables}
+                    if new_context.issubset(cur_context):
+                        yield (str(cur_step.category), (cur_step.step, f'No new deductions in step:\n{str(cur_step.step)}'))
+                        continue
+                
+                if staged and not is_deducing_stage and cur_step.is_deducing:
+                    is_deducing_stage = True
+
+                states.append(new_problem_state)
+                steps.append(cur_step)
+                cur_problem_state = new_problem_state
+                yield (str(cur_step.category), (cur_step.step, format_introduced_context(steps), str(cur_problem_state)))
+            
+            await self.reset_async()
+            yield 'Step budget limit exceeded.'
+        except Exception as e:
+            yield f'Fatal Error:\n{[traceback.format_exc()]}'
+        return
+
 
 class LLMAutoregressiveProblemGenerationAgent(AutoregressiveProblemGenerationAgent):
     def __init__(
@@ -1258,17 +1445,7 @@ class SFT_LLMAutoregressiveProblemGenerationAgentV2(SFT_LLMAutoregressiveProblem
                 context += ' '.join([v.name if v.name is not None else "_" for v in vars_to_format[:i+1]]) + f' : {vars_to_format[0].t}\n'
                 vars_to_format = vars_to_format[i+1:]
         
-        introduced_fvars = []
-        for step in step_history:
-            if step.is_introducing:
-                lines = [l for l in step.step_draft.splitlines() if l != '']
-                while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
-                    lines.pop(0)
-                step_code = '\n'.join(lines)
-                assert step_code.startswith('have ') and step_code.endswith(' := sorry')
-                introduced_fvars.append(step_code[len('have '):-len(' := sorry')])
-        
-        introduced_fvars = '\n'.join(introduced_fvars)
+        introduced_fvars = format_introduced_context(step_history)
         prompt = f'''Given the introduced variables/hypotheses and the current context in Lean 4, propose the single most natural next step to explore toward a beautiful conclusion — either
 - derive a new intermediate fact,
 - introduce a fresh variable or hypothesis, or
@@ -1337,17 +1514,7 @@ class SFT_LLMAutoregressiveProblemGenerationAgentV3(SFT_LLMAutoregressiveProblem
                 context += ' '.join([v.name if v.name is not None else "_" for v in vars_to_format[:i+1]]) + f' : {vars_to_format[0].t}\n'
                 vars_to_format = vars_to_format[i+1:]
         
-        introduced_fvars = []
-        for step in step_history:
-            if step.is_introducing:
-                lines = [l for l in step.step_draft.splitlines() if l != '']
-                while len(lines) > 0 and lines[0].split()[0] in ['open', 'set_option']:
-                    lines.pop(0)
-                step_code = '\n'.join(lines)
-                assert step_code.startswith('have ') and step_code.endswith(' := sorry')
-                introduced_fvars.append(step_code[len('have '):-len(' := sorry')])
-        
-        introduced_fvars = '\n'.join(introduced_fvars)
+        introduced_fvars = format_introduced_context(step_history)
         prompt = f'''Given the introduced variables/hypotheses and the current context in Lean 4, propose the single most natural next step to explore toward a beautiful conclusion — either
 - derive a new intermediate fact,
 - introduce a fresh variable or hypothesis, or
