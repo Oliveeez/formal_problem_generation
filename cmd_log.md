@@ -334,6 +334,60 @@ python -m evaluator.fpg_problem_generation_starified \
     --falsify_n_servers 4 \
     --num_concurrency 64
 
+# DFS-Retrained
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
+for i_experiment in 0 1 2 3
+do
+    export ASCEND_RT_VISIBLE_DEVICES=$i_experiment;
+    python -m vllm.entrypoints.openai.api_server \
+        --model /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.seed3407 \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key numina-lean-goedelv2_8b-fpgv3 \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --enable-prompt-tokens-details \
+        --max-model-len 8192 &
+done
+
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
+for i_experiment in 4 5 6 7
+do
+    export ASCEND_RT_VISIBLE_DEVICES=$i_experiment;
+    python -m vllm.entrypoints.openai.api_server \
+        --model /home/ma-user/local_cache/deepseek-ai/DeepSeek_nonCoT-Prover-V2-7B \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key theorem_proving \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --enable-prompt-tokens-details \
+        --max-model-len 8192 &
+done
+
+# Agent Run
+ulimit -s unlimited;
+python -m evaluator.fpg_problem_generation_starified \
+    --log_root output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.seed3407 \
+    --agent_name sft_ar_v3 \
+    --num_generation_attempt 5000 \
+    --condition_sources "['numina_lean']" \
+    --base_url http://0.0.0.0:37210/v1 \
+    --api_key numina-lean-goedelv2_8b-fpgv3 \
+    --model_name /cache/ckpts/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.seed3407 \
+    --n_servers 4 \
+    --falsify_base_url http://0.0.0.0:37214/v1 \
+    --falsify_api_key theorem_proving \
+    --falsify_model_name /home/ma-user/local_cache/deepseek-ai/DeepSeek_nonCoT-Prover-V2-7B \
+    --falsify_n_servers 4 \
+    --num_concurrency 96
+
 # Numina-Lean, Starified
 export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
 ldd `which python`
@@ -979,6 +1033,135 @@ python -m evaluator.fpg_evaluate_kc \
     --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
     --num_concurrency 60 --kc_estimation_mode early_stop --try_num 4
 ```
+## Evaluation: K-inf samples
+```shell
+# 8 GPUs
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
+MODEL_LIST=( \
+    "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
+    "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
+    "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
+    "/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B" \
+    "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
+    "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
+    "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
+    "/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B" \
+)
+KEY_LIST=( \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+)
+length=${#MODEL_LIST[@]}
+
+for ((i=0; i<length; i++)); do
+    export ASCEND_RT_VISIBLE_DEVICES=$i;
+    python -m vllm.entrypoints.openai.api_server \
+        --model ${MODEL_LIST[i+1]} \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key ${KEY_LIST[i+1]} \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 &
+done
+
+# Goedel-Prover-V2-8B
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_kc \
+    --load_path /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch/inf_ds.pkl \
+    --log_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch/inf_ds/Goedel-Prover-V2-8B \
+    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1','http://0.0.0.0:37213/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B']" \
+    --num_concurrency 80 --kc_estimation_mode early_stop --try_num 15;
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_kc \
+    --load_path /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.0913.staged/inf_ds.pkl \
+    --log_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.0913.staged/inf_ds/Goedel-Prover-V2-8B \
+    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1','http://0.0.0.0:37213/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B','/home/ma-user/local_cache/Goedel-LM/Goedel-Prover-V2-8B']" \
+    --num_concurrency 80 --kc_estimation_mode early_stop --try_num 15;
+
+
+# DeepSeek-Prover-V2-7B
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_kc \
+    --load_path /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch/inf_ds.pkl \
+    --log_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch/inf_ds/DeepSeek-Prover-V2-7B \
+    --proof_gen_base_urls "['http://0.0.0.0:37214/v1','http://0.0.0.0:37215/v1','http://0.0.0.0:37216/v1','http://0.0.0.0:37217/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
+    --num_concurrency 80 --kc_estimation_mode early_stop --try_num 15;
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_kc \
+    --load_path /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.0913.staged/inf_ds.pkl \
+    --log_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.0913.staged/inf_ds/DeepSeek-Prover-V2-7B \
+    --proof_gen_base_urls "['http://0.0.0.0:37214/v1','http://0.0.0.0:37215/v1','http://0.0.0.0:37216/v1','http://0.0.0.0:37217/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B','/home/ma-user/local_cache/deepseek-ai/DeepSeek-Prover-V2-7B']" \
+    --num_concurrency 80 --kc_estimation_mode early_stop --try_num 15;
+
+
+# 4 GPUs
+export LD_PRELOAD="$LD_PRELOAD:/usr/lib64/libtcmalloc.so" # Make the priority of tcmalloc higher
+ldd `which python`
+export TASK_QUEUE_ENABLE=2 # Optimize operator delivery queue, this will affect the memory peak value, and may degrade if the memory is tight.
+MODEL_LIST=( \
+    "/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B" \
+    "/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B" \
+    "/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B" \
+    "/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B" \
+)
+KEY_LIST=( \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+    "theorem_prover" \
+)
+length=${#MODEL_LIST[@]}
+
+for ((i=0; i<length; i++)); do
+    export ASCEND_RT_VISIBLE_DEVICES=$i;
+    python -m vllm.entrypoints.openai.api_server \
+        --model ${MODEL_LIST[i+1]} \
+        --port 3721${ASCEND_RT_VISIBLE_DEVICES} \
+        --dtype bfloat16 \
+        --api-key ${KEY_LIST[i+1]} \
+        --trust-remote-code \
+        --enable-prefix-caching \
+        --disable-log-requests \
+        --max-model-len 8192 &
+done
+
+# Kimina-Prover-Distill-8B
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_kc \
+    --load_path /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch/inf_ds.pkl \
+    --log_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch/inf_ds/Kimina-Prover-Distill-8B \
+    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1','http://0.0.0.0:37213/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B']" \
+    --num_concurrency 80 --kc_estimation_mode early_stop --try_num 15;
+ulimit -s unlimited;
+python -m evaluator.fpg_evaluate_kc \
+    --load_path /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.0913.staged/inf_ds.pkl \
+    --log_root /home/ma-user/workspace/formal_problem_generation/output_tmp/output/sft_ar_v3/Goedel-Prover-V2-8B.Numina-Lean-reasseblmed.39509.problem_generator.nopack.3epoch.0913.staged/inf_ds/Kimina-Prover-Distill-8B \
+    --proof_gen_base_urls "['http://0.0.0.0:37210/v1','http://0.0.0.0:37211/v1','http://0.0.0.0:37212/v1','http://0.0.0.0:37213/v1']" \
+    --proof_gen_api_keys "['theorem_prover','theorem_prover','theorem_prover','theorem_prover']" \
+    --proof_gen_model_names "['/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B','/home/ma-user/local_cache/AI-MO/Kimina-Prover-Distill-8B']" \
+    --num_concurrency 80 --kc_estimation_mode early_stop --try_num 15;
+```
+
 
 # Data Scaleup: Deductive Proving FineLeanCorups
 ```shell
@@ -1038,6 +1221,7 @@ ulimit -s unlimited; python ./fineleancorpus.reassemble_trajectory_bugfix.py \
     --n_concurrency 12 \
     --reverse_order False
 ```
+
 
 ## Bug
 ```lean4

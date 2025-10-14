@@ -55,6 +55,7 @@ def main(
     use_stemmer: bool = True,       # 英文建议 True
     num_workers: int = 100,            # 0/1 = 单进程；>1 使用多进程
     chunksize: int = 400,
+    seed: int = 42,
 ) -> None:
     data_root = '/sfs/liuqi/data/fpg_valid_fixed_evaluated/'
 
@@ -64,6 +65,7 @@ sample_size: int = {sample_size},
 use_stemmer: bool = {use_stemmer},
 num_workers: int = {num_workers},
 chunksize: int = {chunksize}
+seed: int = {seed},
 ''')
 
     print('exp_name', 'mean', 'std', sep='\t')
@@ -80,7 +82,6 @@ chunksize: int = {chunksize}
         # field="formal_statement"
         metric: str = "rougeL"          # "rougeL" 或 "rougeLsum"
         use_stemmer: bool = True       # 英文建议 True
-        seed: int | None = 42
         ensure_unique_rounds: bool = False
         # mp_chunksize: int = 256          # map 的任务分块大小
 

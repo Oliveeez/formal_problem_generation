@@ -5,7 +5,11 @@ common/pantograph/pantograph-repl
 # Project
 data/MiniF2F/
 output/
-work_dirs/
+work_dirs
+.vscode
+main.json
+main.jsonl
+informal_evaluated.zip
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

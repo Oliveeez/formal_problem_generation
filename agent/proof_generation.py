@@ -800,6 +800,42 @@ class StepProver_Critic_AVGGOAL_LLMProofSearchAgent(StepProver_NALP_AVGGOAL_LLMP
 
         return -value
 
+class AesopProofGenerationAgent:
+    """
+    A template agent for proof generation
+    """
+    def __init__(
+        self, *args, **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.model = 'aesop'
+        self.token_usage = C.defaultdict(int)
+    
+    async def search_async(
+        self,
+        server: Server,
+        init_state: GoalState,
+        tag: str='',
+        *args, **kwargs
+    ) -> ProofGenerationResult:
+        time_start = time.time()
+        try:
+            final_state = await server.goal_tactic_async(init_state, 0, 'aesop')
+            assert final_state.is_solved, f'!final_state.is_solved: {[str(final_state)]}'
+            
+            logger.debug(f'search_async({tag}): Succeeded.')
+            return ProofGenerationResult(
+                duration=time.time() - time_start,
+                success=True,
+                proof=[(0, 'aesop')]
+            )
+        except Exception as e:
+            logger.debug(f'search_async({tag}): Failed to generate tactics due to {repr(e)}')
+            return ProofGenerationResult(
+                duration=time.time() - time_start,
+                success=False,
+            )
+
 class LLMWholeProofGenerationAgent(ProofGenerationAgent):
     """
     A template agent for proof generation
