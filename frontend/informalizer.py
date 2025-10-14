@@ -575,10 +575,10 @@ def parse_response(response: str) -> dict:
         )
 
 async def informalize(header: str, formal_statement: str, formal_proof: str, tag_i: int) -> None:
-    responses = []
-    n_prompt_tokens = []
-    n_completion_tokens = []
-    n_cached_tokens = []
+    # responses_all = []
+    # n_prompt_tokens = []
+    # n_completion_tokens = []
+    # n_cached_tokens = []
     prompt = format_informalization_prompt(
         header=header,
         formal_statement=formal_statement,
@@ -608,13 +608,13 @@ async def informalize(header: str, formal_statement: str, formal_proof: str, tag
                 temperature=0.2 * i_retry,
             ))
             # breakpoint()
-            n_prompt_tokens = None if responses.usage is None else responses.usage.prompt_tokens
-            n_completion_tokens = None if responses.usage is None else responses.usage.completion_tokens
-            n_cached_tokens = None if responses.usage is None or responses.usage.prompt_tokens_details is None else responses.usage.prompt_tokens_details.cached_tokens
-            responses.append(responses.choices[0].message.content)
-            n_prompt_tokens.append(n_prompt_tokens)
-            n_completion_tokens.append(n_completion_tokens)
-            n_cached_tokens.append(n_cached_tokens)
+            # n_prompt_tokens = None if responses.usage is None else responses.usage.prompt_tokens
+            # n_completion_tokens = None if responses.usage is None else responses.usage.completion_tokens
+            # n_cached_tokens = None if responses.usage is None or responses.usage.prompt_tokens_details is None else responses.usage.prompt_tokens_details.cached_tokens
+            # responses_all.append(responses.choices[0].message.content)
+            # n_prompt_tokens.append(n_prompt_tokens)
+            # n_completion_tokens.append(n_completion_tokens)
+            # n_cached_tokens.append(n_cached_tokens)
             
             informalization = parse_response(responses.choices[0].message.content)
             logger.opt(colors=True).info(f'<green>informalize({tag_i}): succeeded</green>')

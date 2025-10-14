@@ -5,15 +5,19 @@ import asyncio
 import warnings
 import signal
 import functools as F
+import subprocess
 
-import nest_asyncio
-nest_asyncio.apply()
+from common.constants import FPS_GLOBAL_SETTING
+if FPS_GLOBAL_SETTING['TO_SYNC_ENABLED']:
+    import nest_asyncio
+    nest_asyncio.apply()
+
 from loguru import logger
 import numpy as np
 from async_lru import alru_cache
 
 from common.utils import to_sync, timeit, Spawn, chunk_list
-from common.constants import DEFAULT_CORE_OPTIONS, REPL_TIMEOUT, REPL_MAXREAD, FPS_GLOBAL_SETTING
+from common.constants import DEFAULT_CORE_OPTIONS, REPL_TIMEOUT, REPL_MAXREAD
 from common.pantograph.dataclasses import (
     parse_expr,
     Expr,
@@ -38,7 +42,7 @@ def _get_proc_path():
     return _get_proc_cwd() / "pantograph-repl"
 
 @alru_cache(maxsize=128)
-async def check_output(*args, **kwargs):
+async def check_output_async(*args, **kwargs):
     p = await asyncio.create_subprocess_exec(
         *args, 
         stdout=asyncio.subprocess.PIPE,
@@ -56,13 +60,35 @@ async def get_lean_path_async(project_path):
     """
     Extracts the `LEAN_PATH` variable from a project path.
     """
-    p = await check_output(
+    p = await check_output_async(
         'lake', 'env', 'printenv', 'LEAN_PATH',
         cwd=project_path,
     )
     return p
 
-get_lean_path = to_sync(get_lean_path_async, force=True)
+@F.lru_cache(maxsize=128)
+def check_output(*args, **kwargs):
+    p = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,** kwargs,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ResourceWarning)
+        stdout_data, stderr_data = p.communicate()
+    if p.returncode == 0:
+        return stdout_data
+
+@F.lru_cache(maxsize=128)
+def get_lean_path(project_path):
+    """
+    Extracts the `LEAN_PATH` variable from a project path.
+    """
+    p = check_output(
+        'lake', 'env', 'printenv', 'LEAN_PATH',
+        cwd=project_path,
+    )
+    return p
 
 class TacticFailure(Exception):
     """

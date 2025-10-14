@@ -606,7 +606,7 @@ def to_sync(func, force: bool=False):
     def wrapper(*args, **kwargs):
         if not force and not FPS_GLOBAL_SETTING['TO_SYNC_ENABLED']:
             raise RuntimeError('to_sync() is not enabled in common.constants.FPS_GLOBAL_SETTING')
-        return asyncio.get_event_loop().run_until_complete(func(*args, **kwargs))
+        return asyncio.run(func(*args, **kwargs))
     return wrapper
 
 def timeit(func):

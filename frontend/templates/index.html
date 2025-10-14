@@ -80,21 +80,46 @@
                             </label>
                             <select id="subject" name="subject" 
                                 class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary/50 focus:border-primary transition">
-                                <option value="algebra">代数</option>
-                                <option value="geometry">几何</option>
-                                <option value="calculus">微积分</option>
-                                <option value="probability">概率论</option>
-                                <option value="statistics">统计学</option>
+                                <option value="Algebra">Algebra</option>
+                                <option value="Arithmetic">Arithmetic</option>
+                                <option value="Calculus">Calculus</option>
+                                <option value="Combinatorics">Combinatorics</option>
+                                <option value="Functional Equations">Functional Equations</option>
+                                <option value="Geometry">Geometry</option>
+                                <option value="Inequalities">Inequalities</option>
+                                <option value="Intermediate Algebra">Intermediate Algebra</option>
+                                <option value="Linear Algebra">Linear Algebra</option>
+                                <option value="Logic and Puzzles">Logic and Puzzles</option>
+                                <option value="NaN">NaN</option>
+                                <option value="Number Theory">Number Theory</option>
+                                <option value="Other">Other</option>
+                                <option value="Precalculus">Precalculus</option>
+                                <option value="Recursion Other">Recursion Other</option>
+                                <option value="Trigonometry">Trigonometry</option>
+                                <option value="unknown">unknown</option>
                             </select>
                         </div>
                         
                         <div>
                             <label for="source" class="block text-sm font-medium text-gray-700 mb-1">
-                                问题来源/难度
+                                题目来源
                             </label>
-                            <input type="text" id="source" name="source" value="基础难度"
+                            <select id="source" name="source" 
                                 class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary/50 focus:border-primary transition">
-                            </input>
+                                <option value="amc_aime">amc_aime</option>
+                                <option value="aops_forum">aops_forum</option>
+                                <option value="cn_contest">cn_contest</option>
+                                <option value="cn_k12">cn_k12</option>
+                                <option value="inequalities">inequalities</option>
+                                <option value="math_test">math_test</option>
+                                <option value="math_train">math_train</option>
+                                <option value="number_theory">number_theory</option>
+                                <option value="olympiads">olympiads</option>
+                                <option value="olympiads_ref">olympiads_ref</option>
+                                <option value="secondary_math">secondary_math</option>
+                                <option value="synthetic">synthetic</option>
+                                <option value="unknown">unknown</option>
+                            </select>
                         </div>
                         
                         <div class="pt-2">
@@ -167,7 +192,7 @@
                             <h3 class="text-lg font-medium text-gray-700 mb-2 flex items-center">
                                 <i class="fa fa-list-alt text-blue-500 mr-2"></i>引入的条件/变量
                             </h3>
-                            <div id="introducedContext" class="p-4 bg-gray-50 rounded-lg border border-gray-200 min-h-[80px]">
+                            <div id="introducedContext" class="p-4 bg-gray-50 rounded-lg border border-gray-200 min-h-[80px]" style="white-space: pre-line">
                                 选择左侧步骤查看对应上下文...
                             </div>
                         </div>
@@ -176,7 +201,7 @@
                             <h3 class="text-lg font-medium text-gray-700 mb-2 flex items-center">
                                 <i class="fa fa-compass text-green-500 mr-2"></i>当前上下文
                             </h3>
-                            <div id="currentContext" class="p-4 bg-gray-50 rounded-lg border border-gray-200 min-h-[120px]">
+                            <div id="currentContext" class="p-4 bg-gray-50 rounded-lg border border-gray-200 min-h-[120px]" style="white-space: pre-line">
                                 选择左侧步骤查看对应上下文...
                             </div>
                         </div>
@@ -192,8 +217,8 @@
                     <div id="resultContainer" class="opacity-50">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <h3 class="text-lg font-medium text-gray-700 mb-2 flex items-center">
-                                    <i class="fa fa-list-alt text-blue-500 mr-2"></i>条件
+                                <h3 class="text-lg font-medium text-gray-700 mb-2 flex items-center" style="white-space: pre-line">
+                                    <i class="fa fa-list-alt text-blue-500 mr-2"></i>形式化代码
                                 </h3>
                                 <div id="formal_code" class="p-4 bg-gray-50 rounded-lg border border-gray-200 min-h-[80px]">
                                     等待生成...
@@ -201,8 +226,8 @@
                             </div>
                             
                             <div>
-                                <h3 class="text-lg font-medium text-gray-700 mb-2 flex items-center">
-                                    <i class="fa fa-question-circle text-purple-500 mr-2"></i>结论/答案
+                                <h3 class="text-lg font-medium text-gray-700 mb-2 flex items-center" style="white-space: pre-line">
+                                    <i class="fa fa-question-circle text-purple-500 mr-2"></i>题目
                                 </h3>
                                 <div id="informal_problem_and_answer" class="p-4 bg-gray-50 rounded-lg border border-gray-200 min-h-[80px]">
                                     等待生成...
@@ -211,8 +236,8 @@
                         </div>
                         
                         <div class="mt-6">
-                            <h3 class="text-lg font-medium text-gray-700 mb-2 flex items-center">
-                                <i class="fa fa-lightbulb-o text-yellow-500 mr-2"></i>解法
+                            <h3 class="text-lg font-medium text-gray-700 mb-2 flex items-center" style="white-space: pre-line">
+                                <i class="fa fa-lightbulb-o text-yellow-500 mr-2"></i>解答
                             </h3>
                             <div id="informal_solution" class="p-4 bg-gray-50 rounded-lg border border-gray-200 min-h-[120px]">
                                 等待生成...

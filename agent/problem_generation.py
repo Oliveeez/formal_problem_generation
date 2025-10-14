@@ -1067,7 +1067,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                                 for v in step.new_contexts:
                                     assert submission_fvar.t != v.t, f'submission_fvar.t={submission_fvar.t}, introduced_hyp={step.step_code}'
                     except:
-                        yield (str(cur_step.category), (cur_step.step, repr(e)))
+                        yield (cur_step.category.value, (cur_step.step, repr(e)))
                     
                     steps.append(cur_step)
                     result = ProblemGenerationProcess(
@@ -1108,12 +1108,12 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                     result.metainfo = json.dumps(result.metainfo)
                     self.token_usage = C.defaultdict(list)
                     
-                    yield (str(cur_step.category), (cur_step.step, format_introduced_context(steps), str(cur_problem_state)))
+                    yield (cur_step.category.value, (cur_step.step, format_introduced_context(steps), str(cur_problem_state)))
                     yield ('Final', result)
                     return
                 
                 if staged and is_deducing_stage and cur_step.is_introducing:
-                    yield (str(cur_step.category), (cur_step.step, 'Introducing step rejected in deducing stage.'))
+                    yield (cur_step.category.value, (cur_step.step, 'Introducing step rejected in deducing stage.'))
                     continue
                 
                 # Not submitting: deducing or introducing
@@ -1135,7 +1135,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                     assert len(new_problem_state.goals) == 1 and new_problem_state.goals[0].target == 'False', str(new_problem_state)
                 except Exception as e:
                     # logger.debug(f'generate_async({tag}): {i_trial}/{self.max_search_trials}, step {cur_step.category} failed due to {repr(e)}')
-                    yield (str(cur_step.category), (cur_step.step, repr(e)))
+                    yield (cur_step.category.value, (cur_step.step, repr(e)))
                     # breakpoint()
                     # print()
                     continue
@@ -1153,12 +1153,12 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                     if any((v.t_type is None or v.t_type == 'Prop') for v in cur_step.new_contexts):
                         falsify_proof = await self.falsify_async(state=new_problem_state, server=server, step_history=steps + [cur_step], tag=tag)
                         if falsify_proof is not None:
-                            yield (str(cur_step.category), (cur_step.step, f'New Proof State:\n```\n{str(new_problem_state).strip()}\n```\n\nFalsified by:\n```lean4\n{falsify_proof.strip()}\n```.'))
+                            yield (cur_step.category.value, (cur_step.step, f'New Proof State:\n```\n{str(new_problem_state).strip()}\n```\n\nFalsified by:\n```lean4\n{falsify_proof.strip()}\n```.'))
                             continue
                     
                 # Reject if not introducing new contexts
                 if str(new_problem_state) == str(cur_problem_state):
-                    yield (str(cur_step.category), (cur_step.step, f'State unchanged in step:\n{str(cur_step.step)}'))
+                    yield (cur_step.category.value, (cur_step.step, f'State unchanged in step:\n{str(cur_step.step)}'))
                     continue
                 
                 # Reject if only introducing existing things
@@ -1166,7 +1166,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                     cur_context = {v.t for v in cur_problem_state.goals[0].variables}
                     new_context = {v.t for v in new_problem_state.goals[0].variables}
                     if new_context.issubset(cur_context):
-                        yield (str(cur_step.category), (cur_step.step, f'No new deductions in step:\n{str(cur_step.step)}'))
+                        yield (cur_step.category.value, (cur_step.step, f'No new deductions in step:\n{str(cur_step.step)}'))
                         continue
                 
                 if staged and not is_deducing_stage and cur_step.is_deducing:
@@ -1175,7 +1175,7 @@ class AutoregressiveProblemGenerationAgent(ProblemGenerationAgent):
                 states.append(new_problem_state)
                 steps.append(cur_step)
                 cur_problem_state = new_problem_state
-                yield (str(cur_step.category), (cur_step.step, format_introduced_context(steps), str(cur_problem_state)))
+                yield (cur_step.category.value, (cur_step.step, format_introduced_context(steps), str(cur_problem_state)))
             
             await self.reset_async()
             yield 'Step budget limit exceeded.'
