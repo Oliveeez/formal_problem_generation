@@ -30,7 +30,7 @@ from common.pantograph.server import PersistentServer
 from common.pantograph.parsing_server import PersistentParsingServer
 from agent.problem_generation import ProblemFalsifier, ProblemGenerationProcess
 from agent.problem_generation import AutoregressiveProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgent, SFT_LLMAutoregressiveProblemGenerationAgentV2, SFT_LLMAutoregressiveProblemGenerationAgentV3
-from informalizer import informalize
+from frontend.informalizer import informalize
 
 AGENT_DICT: Dict[str, AutoregressiveProblemGenerationAgent] = {
     'sft_ar' : SFT_LLMAutoregressiveProblemGenerationAgent,
@@ -41,8 +41,8 @@ AGENT_DICT: Dict[str, AutoregressiveProblemGenerationAgent] = {
 app = FastAPI(title="数学问题生成可视化系统")
 
 # 配置静态文件和模板
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
+templates = Jinja2Templates(directory="frontend/templates")
 
 # 存储活跃的生成任务
 active_tasks: Dict[str, AsyncGenerator] = {}
@@ -254,7 +254,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             "message": str(e)
         })
 
-def main(
+def initialize(
     agent_name: str,
     
     base_url: str,
@@ -284,7 +284,7 @@ def main(
     logger.remove()
     logger.add(sys.stdout, level='INFO')    # filter=lambda record: record["name"] != "agent.solution_autoformalization"
     logger.add(now+'.log', level='DEBUG')
-    logger.info(f'Evaluating problem generator with hyperparams: {saved_args}')
+    logger.info(f'Initializing with hyperparams: {saved_args}')
     if staged:
         logger.warning('Staged intro-deducing generation.')
 
@@ -411,7 +411,7 @@ def main(
     generate_worker = _generate_worker
     
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=frontend_port, reload=True)
+    uvicorn.run("frontend.main:app", host="0.0.0.0", port=frontend_port, reload=True)
 
 if __name__ == "__main__":
-    Fire(main)
+    Fire(initialize)
